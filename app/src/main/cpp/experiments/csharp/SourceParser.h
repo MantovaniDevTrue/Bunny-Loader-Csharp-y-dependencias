@@ -17,7 +17,6 @@ struct ParsedSourceType {
 bool parseCSharpSource(const std::string& source,
                        std::vector<ParsedSourceType>* definitions,
                        std::string* error,
-                       bool requireContent = true,
-                       int* localizationModules = nullptr);
+                       bool requireContent = true);
 
 }

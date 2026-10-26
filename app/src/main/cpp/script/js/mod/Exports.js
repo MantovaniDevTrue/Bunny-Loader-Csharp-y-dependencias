@@ -9,21 +9,15 @@ Object.assign(globalThis, {
     ModTouchButton, TouchButtonLoader, KeybindLoader, ModKeybind: ModTouchButton,
     ModPlayer, ExtraJump, PlayerDrawLayer, PlayerDrawLayers, ModBuff, ModMount, MountTextureType, ModTile, ModBannerTile, ModTileEntity, TEModdedPylon, ModPylon, ModTree, TreeTypes, ModWall, ModProjectile,
     ModCommand, CommandType, UsageException, CommandLoader, ModHair, ModCloud, CloudLoader, ModEmoteBubble, ModAchievement,
-    ModNPC, ModBossBar, NPCLoot, NPCSpawnInfo, SpawnPool, SpawnCondition, NPCShop, NPCHappiness, AffectionLevel, ModGore, ModDust, DustLoader,
+    ModNPC, ModBossBar, NPCLoot, NPCSpawnInfo, SpawnPool, SpawnCondition, NPCShop, NPCHappiness, AffectionLevel, ModGore,
     GlobalItem, GlobalNPC, GlobalProjectile, GlobalLoot, GlobalTile, GlobalBuff, GlobalBossBar, GlobalRecipe,
     ModPacket, NetWriter, NetReader,
     SoundStyle, SoundEngine, SoundLimitBehavior, MusicLoader, SceneEffectPriority,
     ModScreenEffect, ScreenEffects, ScreenPresets, ScreenGraphics, ScreenUtils,
-    UIElement, UIState, UserInterface, StyleDimension, CalculatedStyle, UIEvent, UIMouseEvent, UIScrollWheelEvent,
-    UIPanel, UIText, UITextPanel, UIImage, UIImageButton, UIImageFramed, UIList, UIScrollbar,
-    GameInterfaceLayer, LegacyGameInterfaceLayer, InterfaceScaleType, UICommon,
-    ModResourceOverlay, ResourceOverlayDrawContext, PlayerStatsSnapshot,
 });
 
 ArmorSetLoader.InstallHairSettings();
 ItemLoader.InstallResearch();
-if (typeof globalThis.bl?.csharp?.tooltipPlan === 'function')
-    Hooks.Once('item.Tooltips', TooltipLoader.Install);
 
 // Sempre ligado, com ou sem mod: o "Config. dos Mods" do menu de pausa.
 ModConfigMenu.Install();

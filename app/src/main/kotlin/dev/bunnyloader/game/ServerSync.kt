@@ -7,7 +7,6 @@ import android.util.Log
 import dev.bunnyloader.GameActivity
 import dev.bunnyloader.mods.Catalog
 import dev.bunnyloader.mods.ModRepository
-import dev.bunnyloader.mods.PackType
 import dev.bunnyloader.mods.RemoteCatalog
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -202,9 +201,7 @@ object ServerSync {
     /** Os mods do servidor na ordem dele, como o launcher os passa ao jogo. */
     private fun writeSession(context: Context, repo: ModRepository, offer: Offer) {
         val installed = repo.list()
-        // Fontes so mudam a letra: ficam as do jogador, sem passar pelo servidor.
-        val fonts = installed.filter { it.packType == PackType.FONT && !it.isOutdated && repo.isEnabled(it.uid) }.map { it.uid }
-        val specs = ServerModSync.sessionSpecs(offer.mods, installed, offer.textures, fonts)
+        val specs = ServerModSync.sessionSpecs(offer.mods, installed, offer.textures)
         offer.mods.forEach { require(repo.hasEntry(it.uid)) { "${label(it)} ficou sem o arquivo de entrada" } }
         val session = Session(specs, offer.address, offer.port, offer.password, offer.player)
         File(context.filesDir, SESSION).writeText(json.encodeToString(session))

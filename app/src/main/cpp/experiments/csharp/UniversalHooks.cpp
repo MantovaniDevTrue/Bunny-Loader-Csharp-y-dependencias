@@ -1,6 +1,4 @@
 #include "experiments/csharp/UniversalHooks.h"
-#include "experiments/csharp/UniversalHookModes.generated.h"
-#include "experiments/csharp/UniversalSystemStages.h"
 #include "experiments/csharp/UniversalHookMailbox.h"
 #include "hook/HookManager.h"
 #include "il2cpp/Resolver.h"
@@ -45,7 +43,6 @@ struct Install {
     std::string type, method;
     int slot = -1, result = -1;
     bool isStatic = false, int32Mode = false, int32PairMode = false;
-    bool systemStage = false;
     int extendedMode = 0;
 } install;
 std::atomic<uint64_t> epoch{1};
@@ -74,21 +71,21 @@ int32_t callOriginalInt32Pair(Entry& entry, uintptr_t self, int32_t first, int32
 int32_t callOriginalExtended(Entry& entry, uintptr_t self, int32_t a, int32_t b, int32_t c, const MethodInfo* info) {
     void* target = __atomic_load_n(&entry.original, __ATOMIC_ACQUIRE);
     switch (entry.extendedMode) {
-        case kExtendedHookInt32Zero:
+        case 1:
             if (entry.isStatic) return reinterpret_cast<int32_t(*)(const MethodInfo*)>(target)(info);
             return reinterpret_cast<int32_t(*)(void*, const MethodInfo*)>(target)(reinterpret_cast<void*>(self), info);
-        case kExtendedHookVoidInt32:
+        case 2:
             if (entry.isStatic) reinterpret_cast<void(*)(int32_t, const MethodInfo*)>(target)(a, info);
             else reinterpret_cast<void(*)(void*, int32_t, const MethodInfo*)>(target)(reinterpret_cast<void*>(self), a, info);
             return 0;
-        case kExtendedHookVoidInt32Pair:
+        case 3:
             if (entry.isStatic) reinterpret_cast<void(*)(int32_t, int32_t, const MethodInfo*)>(target)(a, b, info);
             else reinterpret_cast<void(*)(void*, int32_t, int32_t, const MethodInfo*)>(target)(reinterpret_cast<void*>(self), a, b, info);
             return 0;
-        case kExtendedHookInt32Triple:
+        case 4:
             if (entry.isStatic) return reinterpret_cast<int32_t(*)(int32_t, int32_t, int32_t, const MethodInfo*)>(target)(a, b, c, info);
             return reinterpret_cast<int32_t(*)(void*, int32_t, int32_t, int32_t, const MethodInfo*)>(target)(reinterpret_cast<void*>(self), a, b, c, info);
-        case kExtendedHookVoidInt32Triple:
+        case 5:
             if (entry.isStatic) reinterpret_cast<void(*)(int32_t, int32_t, int32_t, const MethodInfo*)>(target)(a, b, c, info);
             else reinterpret_cast<void(*)(void*, int32_t, int32_t, int32_t, const MethodInfo*)>(target)(reinterpret_cast<void*>(self), a, b, c, info);
             return 0;
@@ -233,7 +230,7 @@ int32_t dispatchExtended(int index, uintptr_t self, int32_t a, int32_t b, int32_
         auto body = [&] { originalValue = vanilla(); };
         const bool ok = il2cpp::guarded(body);
         inOriginal = false;
-        if (ok && (entry.extendedMode == kExtendedHookInt32Zero || entry.extendedMode == kExtendedHookInt32Triple))
+        if (ok && (entry.extendedMode == 1 || entry.extendedMode == 4))
             universalHookMailbox().setOriginalInt32Value(originalValue);
         return ok;
     };
@@ -349,8 +346,6 @@ int installOnGameThread() {
 #if !defined(__aarch64__) && !defined(BUNNY_UNIVERSAL_HOOK_HOST_TEST)
     return -2;
 #else
-    if (install.systemStage)
-        return installUniversalSystemStageOnGameThread(install.method, install.slot);
     auto& api = il2cpp::api();
     const size_t dot = install.type.rfind('.');
     if (dot == std::string::npos || install.type.rfind("Terraria.", 0) != 0 ||
@@ -364,10 +359,10 @@ int installOnGameThread() {
     if (!cls || api.class_is_valuetype(cls) || api.class_is_generic(cls)) return -5;
     const MethodInfo* selected = nullptr;
     const int expectedArgs = install.extendedMode > 0
-        ? kExtendedHookSignatures[install.extendedMode].parameterCount
+        ? (install.extendedMode == 1 ? 0 : install.extendedMode == 2 ? 1 : install.extendedMode == 3 ? 2 : 3)
         : (install.int32PairMode ? 2 : install.int32Mode ? 1 : 0);
     const bool returnsInt32 = install.int32Mode || install.int32PairMode ||
-                              (install.extendedMode > 0 && kExtendedHookSignatures[install.extendedMode].returnsInt32);
+                              install.extendedMode == 1 || install.extendedMode == 4;
     void* iter = nullptr;
     while (const MethodInfo* method = api.class_get_methods(cls, &iter)) {
         if (install.method != api.method_get_name(method) ||
@@ -409,14 +404,14 @@ int installOnGameThread() {
     static const auto intStatics = staticInt32Stubs(std::make_index_sequence<MaxHooks>{});
     static const auto pairInstances = instanceInt32PairStubs(std::make_index_sequence<MaxHooks>{});
     static const auto pairStatics = staticInt32PairStubs(std::make_index_sequence<MaxHooks>{});
-    static const std::array<std::array<void*, MaxHooks>, kExtendedHookMax> extraInstances = {
+    static const std::array<std::array<void*, MaxHooks>, 5> extraInstances = {
         instanceExtra1Stubs(std::make_index_sequence<MaxHooks>{}),
         instanceExtra2Stubs(std::make_index_sequence<MaxHooks>{}),
         instanceExtra3Stubs(std::make_index_sequence<MaxHooks>{}),
         instanceExtra4Stubs(std::make_index_sequence<MaxHooks>{}),
         instanceExtra5Stubs(std::make_index_sequence<MaxHooks>{})
     };
-    static const std::array<std::array<void*, MaxHooks>, kExtendedHookMax> extraStatics = {
+    static const std::array<std::array<void*, MaxHooks>, 5> extraStatics = {
         staticExtra1Stubs(std::make_index_sequence<MaxHooks>{}),
         staticExtra2Stubs(std::make_index_sequence<MaxHooks>{}),
         staticExtra3Stubs(std::make_index_sequence<MaxHooks>{}),
@@ -437,7 +432,7 @@ int installOnGameThread() {
     entry.lastSuspensionSeconds = 0;
     entry.lastTimeout = {};
     entry.suspended = false;
-    void* stub = entry.extendedMode > 0 ? (entry.isStatic ? extraStatics[entry.extendedMode - kExtendedHookMin][used] : extraInstances[entry.extendedMode - kExtendedHookMin][used])
+    void* stub = entry.extendedMode > 0 ? (entry.isStatic ? extraStatics[entry.extendedMode - 1][used] : extraInstances[entry.extendedMode - 1][used])
                  : entry.int32PairMode ? (entry.isStatic ? pairStatics[used] : pairInstances[used])
                  : entry.int32Mode ? (entry.isStatic ? intStatics[used] : intInstances[used])
                  : (entry.isStatic ? statics[used] : instances[used]);
@@ -446,11 +441,6 @@ int installOnGameThread() {
     return used++;
 #endif
 }
-}
-bool isUniversalHookGameThread() {
-    return accepting.load(std::memory_order_acquire) && !inOriginal &&
-        !universalNativeAccessInProgress &&
-        static_cast<long>(syscall(__NR_gettid)) == gameThread.load(std::memory_order_acquire);
 }
 void pumpUniversalHookInstallsOnGameThread() {
     gameThread.store(static_cast<long>(syscall(__NR_gettid)), std::memory_order_release);
@@ -467,7 +457,6 @@ void disableUniversalHooks() {
     epoch.fetch_add(1, std::memory_order_acq_rel);
     universalHookMailbox().cancel();
     for (auto& entry : entries) entry.active.store(false, std::memory_order_release);
-    disableAllUniversalSystemStages();
     install.pending = false;
     install.result = -10;
     install.done = true;
@@ -476,10 +465,9 @@ void disableUniversalHooks() {
 void enableUniversalHooks() { accepting.store(true, std::memory_order_release); }
 
 int requestInstall(const char* type, const char* method, int slot, int isStatic,
-                   bool int32Mode, bool int32PairMode = false, int extendedMode = 0,
-                   bool systemStage = false) {
+                   bool int32Mode, bool int32PairMode = false, int extendedMode = 0) {
     if (!accepting.load(std::memory_order_acquire) || !type || !method || strnlen(type, 257) > 256 || strnlen(method, 129) > 128 ||
-        slot < 0 || slot >= MaxHooks || (isStatic != 0 && isStatic != 1) || extendedMode < 0 || extendedMode > kExtendedHookMax) return -1;
+        slot < 0 || slot >= MaxHooks || (isStatic != 0 && isStatic != 1) || extendedMode < 0 || extendedMode > 5) return -1;
     if (!universalCanInstall || !universalLeaveMono || !universalResumeMono) return -12;
     UniversalHookWorkerYield yield;
     std::unique_lock<std::mutex> lock(install.mutex);
@@ -491,7 +479,6 @@ int requestInstall(const char* type, const char* method, int slot, int isStatic,
     install.int32Mode = int32Mode;
     install.int32PairMode = int32PairMode;
     install.extendedMode = extendedMode;
-    install.systemStage = systemStage;
     install.epoch = epoch.load(std::memory_order_acquire);
     install.pending = true;
     install.done = false;
@@ -500,10 +487,6 @@ int requestInstall(const char* type, const char* method, int slot, int isStatic,
         return -11;
     }
     return install.result;
-}
-extern "C" __attribute__((visibility("default"))) int bunny_universal_hook_install_stage(
-    const char* name, int slot) {
-    return requestInstall("Terraria.Main", name, slot, 0, false, false, 0, true);
 }
 extern "C" __attribute__((visibility("default"))) int bunny_universal_hook_install(
     const char* type, const char* method, int slot, int isStatic) {
@@ -519,7 +502,7 @@ extern "C" __attribute__((visibility("default"))) int bunny_universal_hook_insta
 }
 extern "C" __attribute__((visibility("default"))) int bunny_universal_hook_install_extended(
     const char* type, const char* method, int slot, int isStatic, int extendedMode) {
-    if (extendedMode < kExtendedHookMin || extendedMode > kExtendedHookMax) return -1;
+    if (extendedMode < 1 || extendedMode > 5) return -1;
     return requestInstall(type, method, slot, isStatic, false, false, extendedMode);
 }
 extern "C" __attribute__((visibility("default"))) int bunny_universal_hook_original_i32(
@@ -531,8 +514,7 @@ extern "C" __attribute__((visibility("default"))) int bunny_universal_hook_origi
     return ok ? 1 : 0;
 }
 extern "C" __attribute__((visibility("default"))) void bunny_universal_hook_remove(int index) {
-    if (index >= 1000 && index < 1011) removeUniversalSystemStage(index);
-    else if (index >= 0 && index < MaxHooks) entries[index].active.store(false, std::memory_order_release);
+    if (index >= 0 && index < MaxHooks) entries[index].active.store(false, std::memory_order_release);
 }
 extern "C" __attribute__((visibility("default"))) int64_t bunny_universal_hook_stat(int key) {
     if (key == 6) return universalHookLateCompletionCount();

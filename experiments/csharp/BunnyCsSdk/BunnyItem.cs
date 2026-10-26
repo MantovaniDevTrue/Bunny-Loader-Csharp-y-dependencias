@@ -5,26 +5,8 @@ using System.Linq;
 
 namespace BunnyLoader.Source;
 
-[Flags]
-public enum BunnyQuestCatchRules
-{
-    None = 0,
-    InvertedGravity = 1,
-    Uncommon = 2,
-    InvertedGravityAndUncommon = InvertedGravity | Uncommon
-}
-
 /// <summary>Item geral: os defaults sao aplicados ao Item real pelo host, sem callback Mono por frame.</summary>
-public sealed class BunnyQuestContext
-{
-    public int FishType { get; internal set; }
-    public int PlayerIndex { get; internal set; } = -1;
-    public bool Hardmode { get; internal set; }
-    public bool InvertedGravity { get; internal set; }
-    public bool Uncommon { get; internal set; }
-}
-
-public abstract class BunnyItem : BunnyShootSource
+public abstract class BunnyItem : BunnyRecipeSource
 {
     public BunnyNativeDefaults NativeDefaults { get; } = new();
     public BunnyHoldout? Holdout { get; set; }
@@ -44,116 +26,43 @@ public abstract class BunnyItem : BunnyShootSource
     public static int SellPrice(int platinum=0,int gold=0,int silver=0,int copper=0)
         => checked(BuyPrice(platinum,gold,silver,copper)*5);
     internal override int RecipeStackLimit => MaxStack;
-    /// <summary>
-    /// Mesmo contrato de Item.DefaultToGolfBall(projid) no Android 301720.
-    /// Use em SetDefaults, antes de sobrescrever os valores particulares do item.
-    /// A referência ao projétil é resolvida pelo host, sem ID fixo de mod.
-    /// </summary>
-    public void DefaultToGolfBall(string projectile)
-    {
-        // Estes valores acompanham o helper real do Terraria: bola equipável,
-        // sem gráfico de uso nem acerto direto; o projétil faz a simulação.
-        Width=18; Height=20; UseStyle=1; UseTime=15; UseAnimation=15;
-        Accessory=true; NoMelee=true; Rare=ItemRarityID.Green; Value=10000;
-        UseSound="Item1";
-        NativeDefaults.SetProjectile("shoot",projectile).SetFloat("shootSpeed",12)
-            .SetBool("noUseGraphic",true).SetBool("hasVanityEffects",true);
-    }
     public string DisplayName { get; set; } = "";
     public string Texture { get; set; } = "";
     public string Tooltip { get; set; } = "";
     public Dictionary<string,string> TooltipTranslations { get; } = new(StringComparer.Ordinal);
     // Zero deixa o host inferir o tamanho pela textura, como o ModItem JS.
-    private bool nativeWallDefaults;
-    private int wallIntegerOverrides,wallFlagOverrides;
-    private int cloneIntegerOverrides,cloneFlagOverrides;
-    private bool cloneKnockBackOverride,cloneUseSoundOverride;
-    private string placement="";
-    private void OverrideInteger(int index) { cloneIntegerOverrides|=1<<index;if(nativeWallDefaults)wallIntegerOverrides|=1<<index; }
-    private void OverrideFlag(int index) { cloneFlagOverrides|=1<<index;if(nativeWallDefaults)wallFlagOverrides|=1<<index; }
-    public int Width { get => width; set { width=value; OverrideInteger(0); } }
-    private int width;
-    private int wallHeight=0;
-    public int Height { get => wallHeight; set { wallHeight=value; OverrideInteger(1); } }
-    private int wallMaxStack=1;
-    public int MaxStack { get => wallMaxStack; set { wallMaxStack=value; OverrideInteger(2); } }
-    private int wallValue=0;
-    public int Value { get => wallValue; set { wallValue=value; OverrideInteger(3); } }
-    private int wallRare=0;
-    public int Rare { get => wallRare; set { wallRare=value; OverrideInteger(4); } }
-    public string ModRarityClassName { get; private set; } = "";
-    public void SetRarity<T>() where T : BunnyRarity
-        { ModRarityClassName = BunnyRarityReference.Resolve(GetType(), typeof(T)); OverrideInteger(4); }
-    public bool QuestFish { get; set; }
-    public bool QuestAvailableInPreHardmode { get; set; } = true;
-    public bool QuestAvailableInHardmode { get; set; } = true;
-    public string QuestDescription { get; set; } = "";
-    public string QuestCatchLocation { get; set; } = "";
-    public Dictionary<string,string> QuestDescriptionTranslations { get; } = new(StringComparer.Ordinal);
-    public Dictionary<string,string> QuestCatchLocationTranslations { get; } = new(StringComparer.Ordinal);
-    public BunnyQuestCatchRules QuestCatchRules { get; set; }
-    public Func<BunnyQuestContext,bool>? QuestAvailableWhen { get; set; }
-    public Func<BunnyQuestContext,bool>? QuestCanCatchWhen { get; set; }
-    /// <summary>True quando SetDefaults atribuiu Defense, inclusive zero.</summary>
-    public bool HasDefenseOverride => Behavior.HasDefenseOverride;
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int MaxStack { get; set; } = 1;
+    public int Value { get; set; }
+    public int Rare { get; set; }
     public int Defense { get => Behavior.Defense; set => Behavior.Defense=value; }
-    private int wallDamage=0;
-    public int Damage { get => wallDamage; set { wallDamage=value; OverrideInteger(5); } }
-    private int wallCrit=0;
-    public int Crit { get => wallCrit; set { wallCrit=value; OverrideInteger(6); } }
-    private float knockBack;
-    public float KnockBack { get => knockBack; set { knockBack=value;cloneKnockBackOverride=true; } }
-    private int wallUseTime=0;
-    public int UseTime { get => wallUseTime; set { wallUseTime=value; OverrideInteger(7); } }
-    private int wallUseAnimation=0;
-    public int UseAnimation { get => wallUseAnimation; set { wallUseAnimation=value; OverrideInteger(8); } }
-    private int wallUseStyle=0;
-    public int UseStyle { get => wallUseStyle; set { wallUseStyle=value; OverrideInteger(9); } }
-    private bool wallMelee;
-    public bool Melee { get => wallMelee; set { wallMelee=value; OverrideFlag(0); } }
-    private bool wallNoMelee;
-    public bool NoMelee { get => wallNoMelee; set { wallNoMelee=value; OverrideFlag(1); } }
-    private bool wallAutoReuse;
-    public bool AutoReuse { get => wallAutoReuse; set { wallAutoReuse=value; OverrideFlag(2); } }
-    private bool wallUseTurn;
-    public bool UseTurn { get => wallUseTurn; set { wallUseTurn=value; OverrideFlag(3); } }
-    private bool wallConsumable;
-    public bool Consumable { get => wallConsumable; set { wallConsumable=value; OverrideFlag(4); } }
-    private int wallPick=0;
-    public int Pick { get => wallPick; set { wallPick=value; OverrideInteger(10); } }
+    public int Damage { get; set; }
+    public int Crit { get; set; }
+    public float KnockBack { get; set; }
+    public int UseTime { get; set; }
+    public int UseAnimation { get; set; }
+    public int UseStyle { get; set; }
+    public bool Melee { get; set; }
+    public bool NoMelee { get; set; }
+    public bool AutoReuse { get; set; }
+    public bool UseTurn { get; set; }
+    public bool Consumable { get; set; }
+    public int Pick { get; set; }
     // Unidade interna Terraria: Axe=30 mostra 150% no tooltip (30 * 5).
-    private int wallAxe=0;
-    public int Axe { get => wallAxe; set { wallAxe=value; OverrideInteger(11); } }
-    private int wallHammer=0;
-    public int Hammer { get => wallHammer; set { wallHammer=value; OverrideInteger(12); } }
-    private bool wallAccessory;
-    public bool Accessory { get => wallAccessory; set { wallAccessory=value; OverrideFlag(5); } }
-    private bool wallVanity;
-    public bool Vanity { get => wallVanity; set { wallVanity=value; OverrideFlag(6); } }
-    private string mount="";
-    public string Mount {
-        get=>mount;
-        set {
-            if(value.Length>0&&(value.Length>72||value.Any(c=>!char.IsAsciiLetterOrDigit(c)&&c!='_')))
-                throw new ArgumentException("Invalid local BunnyMount name",nameof(value));
-            mount=value;
-        }
-    }
+    public int Axe { get; set; }
+    public int Hammer { get; set; }
+    public bool Accessory { get; set; }
+    public bool Vanity { get; set; }
     public BunnyItemBehavior Behavior { get; } = new();
     public string BehaviorDefinition => Behavior.ToJson();
-    /// <summary>Colunas opcionais C1: somente atribuições explícitas substituem defaults clonados.</summary>
-    public string NativeCloneOverridesDefinition => Behavior.HasVanillaClone
-        ? "C1|"+cloneIntegerOverrides.ToString(CultureInfo.InvariantCulture)+"|"+
-          cloneFlagOverrides.ToString(CultureInfo.InvariantCulture)+"|"+
-          (cloneKnockBackOverride?"1":"0")+"|"+(cloneUseSoundOverride?"1":"0") : "";
     public string NativeAccessoryEffectsDefinition => Behavior.NativeAccessoryEffectsDefinition;
     /// <summary>Descritor nativo de atributos, imunidades e conjunto de armadura.</summary>
     public string NativeArmorDefinition => Behavior.NativeArmorDefinition;
-    private string useSound="";
     /// <summary>Nome de um campo SoundID, como Item1. Vazio deixa o item sem som de uso.</summary>
-    public string UseSound { get => useSound; set { useSound=value;cloneUseSoundOverride=true; } }
+    public string UseSound { get; set; } = "";
     /// <summary>Descritor de colocacao resolvido pelo nucleo; vazio preserva itens antigos.</summary>
-    public string PlacementDefinition => placement + (nativeWallDefaults ? ":"+wallIntegerOverrides.ToString(CultureInfo.InvariantCulture)+":"+wallFlagOverrides.ToString(CultureInfo.InvariantCulture) : "");
+    public string PlacementDefinition { get; private set; } = "";
     /// <summary>Defaults do Bunny original: coloca um tile vanilla com o estilo indicado.</summary>
     public void DefaultToPlaceableTile(int vanillaTileId, int style = 0)
     {
@@ -166,46 +75,13 @@ public abstract class BunnyItem : BunnyShootSource
         BunnyContentKey.Validate(modTileName,nameof(modTileName),"BunnyItem.DefaultToPlaceableTile");
         Placeable("m"+modTileName,style);
     }
-    /// <summary>Coloca uma parede vanilla. O host valida o campo createWall e sua largura real.</summary>
-    public void DefaultToPlaceableWall(int vanillaWallId) {
-        if(vanillaWallId<=0||vanillaWallId>=367)throw new ArgumentOutOfRangeException(nameof(vanillaWallId));
-        WallPlaceable("wv"+vanillaWallId.ToString(CultureInfo.InvariantCulture));
-    }
-    /// <summary>Parede local ou UID/Nome, inclusive de outro mod C# ou JS.</summary>
-    public void DefaultToPlaceableWall(string modWallName) {
-        BunnyContentKey.Validate(modWallName,nameof(modWallName),"BunnyItem.DefaultToPlaceableWall");
-        WallPlaceable("wm"+modWallName);
-    }
-    // The Android helper owns its defaults. Only later assignments override them,
-    // including assigning false or a value equal to the SDK initial value.
-    private void WallPlaceable(string token) {
-        wallMaxStack=9999;placement=token+":0";nativeWallDefaults=true;wallIntegerOverrides=0;wallFlagOverrides=0;
-    }
     private void Placeable(string token,int style)
     {
         if(style<0||style>32767)throw new ArgumentOutOfRangeException(nameof(style));
-        nativeWallDefaults=false;placement=token+":"+style.ToString(CultureInfo.InvariantCulture);
+        PlacementDefinition=token+":"+style.ToString(CultureInfo.InvariantCulture);
         UseStyle=1;UseAnimation=15;UseTime=10;MaxStack=9999;
         UseTurn=true;AutoReuse=true;Consumable=true;
     }
-    public void DefaultToQuestFish()
-    {
-        QuestFish = true;
-        // Item.DefaultToQuestFish do Android 301720: questItem=true,
-        // width=height=26 e rare=Quest (-11). Flags IsQuestFish/weapon rack
-        // pertencem ao AnglerQuestLoader; questItem é um campo da instância.
-        Width = 26; Height = 26; Rare = ItemRarityID.Quest;
-        NativeDefaults.SetBool("questItem",true);
-        MaxStack = 1;
-        Value = 0;
-    }
-
-    public virtual void ModifyTooltips(List<BunnyTooltipLine> lines) { }
-    public virtual bool PreDrawTooltipLine(BunnyDrawableTooltipLine line) => true;
-
-    public virtual bool OnUse(int playerIndex) => false;
-    public virtual bool OnUse(int playerIndex, BunnyUseContext context) => OnUse(playerIndex);
-    public virtual string OnUseRejectionReason(int playerIndex, BunnyUseContext context) => "";
     public abstract void SetDefaults();
 }
 

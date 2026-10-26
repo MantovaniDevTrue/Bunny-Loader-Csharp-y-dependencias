@@ -5,11 +5,6 @@ import java.util.Properties
 //   -Pbl.nativeBuild=false   (ou a mesma linha em gradle.properties)
 // para compilar e rodar o launcher sem instalar NDK/CMake.
 val nativeBuild = (project.findProperty("bl.nativeBuild") as String?)?.toBoolean() ?: true
-val readyPreview = (project.findProperty("bl.readyPrPreview") as String?)?.toBoolean() ?: false
-val unifiedCSharpQa = (project.findProperty("bl.csharpUnifiedQa") as String?)?.toBoolean() ?: false
-val mountQaDebug = unifiedCSharpQa && ((project.findProperty("bl.mountsQaDebug") as String?)?.toBoolean() ?: false)
-val fiveLoadersQa = ((project.findProperty("bl.fiveLoadersQa") as String?)?.toBoolean() ?: false) || unifiedCSharpQa
-val dustPreview = (project.findProperty("bl.dustPreview") as String?)?.toBoolean() ?: unifiedCSharpQa
 
 // A fonte do launcher e do menu de cheats é a Andy Bold (Monotype), a mesma do
 // Terraria. Não vai para o Git: fica em src/main/res/font/bunny.ttf, integrada
@@ -59,15 +54,11 @@ android {
     ndkVersion = "30.0.16248370"
 
     defaultConfig {
-        applicationId = if (unifiedCSharpQa || readyPreview) "com.bunnyloader.csharptest" else if (fiveLoadersQa) "com.bunnyloader.fiveqa" else "com.bunnyloader"
+        applicationId = "com.bunnyloader"
         minSdk = 24
         targetSdk = 34
-        versionCode = if (unifiedCSharpQa) 326 else if (fiveLoadersQa) 4 else if (readyPreview) 311 else 274
-        versionName = if (unifiedCSharpQa) "1.0.25-csharp-unified-qa" else if (fiveLoadersQa) "1.0.13-five-loaders-qa.4-diagnostic" else if (readyPreview) "1.0.12-dust-native-invasion-qa" else "1.0"
-        if (unifiedCSharpQa) resValue("string", "preview_app_name", "Bunny Loader C#")
-        else if (fiveLoadersQa) resValue("string", "preview_app_name", "Bunny C# Five QA")
-        else if (readyPreview) resValue("string", "preview_app_name", "Bunny Loader C# Test")
-        manifestPlaceholders["bunnyLabel"] = if (readyPreview || fiveLoadersQa) "@string/preview_app_name" else "@string/app_name"
+        versionCode = 274
+        versionName = "1.0"
 
         // Só arm64. O runtime do jogo é integrado e existe apenas para
         // arm64-v8a; permitir armeabi-v7a instalaria o Bunny Loader em
@@ -80,8 +71,6 @@ android {
             externalNativeBuild {
                 cmake {
                     cppFlags += "-std=c++20"
-                    if (dustPreview) arguments += "-DBUNNY_CSHARP_DUST_PREVIEW=ON"
-                    if (fiveLoadersQa) arguments += "-DBUNNY_FIVE_LOADERS_QA=ON"
                 }
             }
         }
@@ -181,7 +170,6 @@ android {
             storePassword = System.getenv("BUNNY_SIGNING_PASSWORD")
             keyAlias = System.getenv("BUNNY_SIGNING_ALIAS")
             keyPassword = System.getenv("BUNNY_SIGNING_PASSWORD")
-            if (readyPreview || fiveLoadersQa) enableV3Signing = true
         }
     } else null
 
@@ -335,19 +323,3 @@ dependencies {
 
 
 
-
-// User requirement: no new APK until the Bunny JS port and its loaders close.
-// Compilation and unit tests remain available. Gate both direct packaging and
-// assemble entry points so a different workflow cannot bypass the QA policy.
-val verifyExampleModApkReadiness by tasks.registering(Exec::class) {
-    group = "verification"
-    description = "Require complete ExampleMod translation and loader evidence before APK packaging"
-    workingDir(rootProject.projectDir)
-    commandLine("python3", rootProject.file("tools/ci/check_examplemod_apk_readiness.py").absolutePath)
-}
-tasks.configureEach {
-    if (name.matches(Regex("(assemble|package)(Debug|Release)")) &&
-        !(mountQaDebug && (name == "assembleDebug" || name == "packageDebug"))) {
-        dependsOn(verifyExampleModApkReadiness)
-    }
-}

@@ -194,7 +194,7 @@ fun ModRow(
             ModIcon(entry, catalog, 64.dp)
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 PixelText(
-                    entry.manifest.nameFor(UiLocalization.language),
+                    entry.manifest.name,
                     size = Ts.Item, color = Bl.Text,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )

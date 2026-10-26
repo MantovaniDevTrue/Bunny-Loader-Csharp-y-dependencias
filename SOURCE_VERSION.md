@@ -1,10 +1,12 @@
-# Fonte integrada
+# Origem da base CSharp
 
-- **Origem:** [MantovaniDevTrue/Bunnyloader-Csharp](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp)
-- **Revisão utilizada:** `e03e7d8d29405ac23c7b084471d40089f97a1ab9`
-- **Data da revisão:** 26/10/2026
-- **Destino:** Bunny Loader C# com dependências e projeto Android
+- Repositório: https://github.com/MantovaniDevTrue/Bunnyloader-Csharp
+- Versão da fonte: v1.0 integrada, 19/10/2026
+- Commit: cfbe784ee3cbc0ba2fabafce56c59e6eac41b67b
+- Escopo: núcleo C#, projeto Android e dependências da mesma revisão
 
-A fonte Android foi mantida nos caminhos originais para preservar os includes, o CMake, os serviços Kotlin/JNI e o empacotamento das DLLs e bibliotecas. O Mono modificado e suas licenças permanecem em `tools/mono/` e `app/src/main/jniLibs/`.
+Esta entrega não inclui os loaders, QA e exemplos experimentais desenvolvidos posteriormente. O host Android e os dois exemplos JavaScript usados pelo próprio projeto original permanecem como dependências da integração; eles não executam os callbacks C#.
 
-Não foram copiados dumps, binários proprietários do Terraria/Unity, recursos privados, tokens, chaves nem APKs. O port de loaders continua em desenvolvimento.
+O runtime Mono modificado, as DLLs de Roslyn e SDK e as bibliotecas ARM64 pertencem ao mesmo snapshot. Os componentes proprietários do Terraria e chaves de assinatura não são distribuídos.
+
+A importação e as verificações de integridade não equivalem a validar todas as funcionalidades do Terraria no dispositivo.

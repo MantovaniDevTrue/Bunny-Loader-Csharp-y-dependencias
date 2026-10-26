@@ -48,9 +48,6 @@ struct Api {
     // um Vector2[] guarda os structs em linha (8 B de dados). Sem o tamanho
     // certo o indice anda errado.
     Il2CppClass* (*class_get_element_class)(Il2CppClass*) = nullptr;
-    Il2CppClass* (*array_class_get)(Il2CppClass*, uint32_t) = nullptr;
-    uint32_t (*array_length)(Il2CppArray*) = nullptr;
-    int (*array_element_size)(const Il2CppClass*) = nullptr;
     // Dimensoes de um array (0 = nao e array). Um metodo que DECLARA devolver
     // System.Array ou object pode devolver um T[] de verdade.
     int (*class_get_rank)(const Il2CppClass*) = nullptr;
@@ -122,10 +119,6 @@ struct Api {
     // System.Type, e System.Type -> classe.
     Il2CppObject* (*type_get_object)(const Il2CppType*) = nullptr;
     Il2CppClass* (*class_from_system_type)(Il2CppObject*) = nullptr;
-    // Metodo -> System.Reflection.MethodInfo e de volta: o MakeGenericMethod de
-    // um metodo generico (bl.vanillaTexture: AssetRepository.Request<Texture2D>).
-    Il2CppObject* (*method_get_object)(const MethodInfo*, Il2CppClass*) = nullptr;
-    const MethodInfo* (*method_get_from_reflection)(Il2CppObject*) = nullptr;
     // Classe aninhada -> a de fora (nullptr se nao e aninhada).
     Il2CppClass* (*class_get_declaring_type)(Il2CppClass*) = nullptr;
     Il2CppThread* (*thread_attach)(Il2CppDomain*) = nullptr;

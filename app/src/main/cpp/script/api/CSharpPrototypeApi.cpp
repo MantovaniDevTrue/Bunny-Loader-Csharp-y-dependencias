@@ -6,8 +6,6 @@
 #include "experiments/csharp/ProjectileWriteTest.h"
 #include "experiments/csharp/CSharpModLoader.h"
 #include "experiments/csharp/SourceLoader.h"
-#include "experiments/csharp/NativeRarityRegistry.h"
-#include "experiments/csharp/NativeRarityGameplay.h"
 #include "experiments/csharp/AutoSourceRuntime.h"
 #include "experiments/csharp/ManagedRuntime.h"
 #include "experiments/csharp/NativeContent.h"
@@ -68,31 +66,6 @@ JSValue makeManagedStatus(JSContext* ctx, const bl::csharp::ManagedRuntimeStatus
     JS_SetPropertyStr(ctx, out, "phase", JS_NewString(ctx, s.phase.c_str()));
     JS_SetPropertyStr(ctx, out, "error", JS_NewString(ctx, s.error.c_str()));
     return out;
-}
-
-JSValue jsManagedRarityColor(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc != 1) return JS_ThrowTypeError(ctx, "rarityColor(type)");
-    int32_t type = -1;
-    if (JS_ToInt32(ctx, &type, argv[0]) < 0) return JS_EXCEPTION;
-    uint32_t argb = 0;
-    if (!bl::csharp::nativeManagedRarityColor(type, &argb)) return JS_NULL;
-    JSValue channels = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, channels, 0, JS_NewInt32(ctx, (argb >> 16) & 255));
-    JS_SetPropertyUint32(ctx, channels, 1, JS_NewInt32(ctx, (argb >> 8) & 255));
-    JS_SetPropertyUint32(ctx, channels, 2, JS_NewInt32(ctx, argb & 255));
-    return channels;
-}
-
-JSValue jsRarityCount(JSContext* ctx, JSValueConst, int argc, JSValueConst*) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "rarityCount()");
-    return JS_NewInt32(ctx, bl::csharp::nativeRarities().nextType());
-}
-
-JSValue jsReserveRarityId(JSContext* ctx, JSValueConst, int argc, JSValueConst*) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "reserveRarityId()");
-    const int id = bl::csharp::nativeRarities().reserveExternalType();
-    if (id < 0) return JS_ThrowRangeError(ctx, "rarity ID capacity exhausted");
-    return JS_NewInt32(ctx, id);
 }
 
 JSValue jsManagedNativeEquipTextures(JSContext* ctx, JSValueConst, int argc, JSValueConst*) {
@@ -165,28 +138,6 @@ JSValue jsNativeItemPolicies(JSContext* ctx,JSValueConst,int argc,JSValueConst*)
     }
     return array;
 }
-JSValue jsNativeTooltipReady(JSContext* ctx,JSValueConst,int argc,JSValueConst* argv) {
-    if(argc!=1)return JS_ThrowTypeError(ctx,"tooltipNativeReady(type)");
-    int32_t type=-1;
-    if(JS_ToInt32(ctx,&type,argv[0])<0)return JS_EXCEPTION;
-    return JS_NewBool(ctx,bl::csharp::nativeTooltipReadyForItem(type));
-}
-
-JSValue jsNativeTooltipJavascriptOwner(JSContext* ctx,JSValueConst,int argc,JSValueConst* argv) {
-    if(argc!=1)return JS_ThrowTypeError(ctx,"tooltipJsOverride(bool)");
-    const int requested=JS_ToBool(ctx,argv[0]);
-    if(requested<0)return JS_EXCEPTION;
-    return JS_NewBool(ctx,bl::csharp::nativeTooltipJavascriptOwner(requested!=0));
-}
-
-JSValue jsManagedTooltipPlan(JSContext* ctx,JSValueConst,int argc,JSValueConst* argv) {
-    if(argc!=1)return JS_ThrowTypeError(ctx,"tooltipPlan(type)");
-    int32_t type=-1;
-    if(JS_ToInt32(ctx,&type,argv[0])<0)return JS_EXCEPTION;
-    const std::string plan=bl::csharp::basicItemTooltipPlan(type);
-    return JS_NewStringLen(ctx,plan.c_str(),plan.size());
-}
-
 JSValue jsPendingItemBehaviors(JSContext* ctx,JSValueConst,int argc,JSValueConst*) {
     if(argc)return JS_ThrowTypeError(ctx,"pendingItemBehaviors()");
     JSValue array=JS_NewArray(ctx);uint32_t i=0;
@@ -2940,12 +2891,6 @@ JSValue makeSuite(JSContext* ctx) {
 void installCSharpPrototypeApi(JSContext* ctx, JSValueConst bl) {
     JSValue api = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, api, "available", JS_NewCFunction(ctx, jsAvailable, "available", 0));
-    JS_SetPropertyStr(ctx, api, "reserveRarityId", JS_NewCFunction(ctx, jsReserveRarityId, "reserveRarityId", 0));
-    JS_SetPropertyStr(ctx, api, "rarityCount", JS_NewCFunction(ctx, jsRarityCount, "rarityCount", 0));
-    JS_SetPropertyStr(ctx, api, "rarityColor", JS_NewCFunction(ctx, jsManagedRarityColor, "rarityColor", 1));
-    JS_SetPropertyStr(ctx, api, "tooltipPlan", JS_NewCFunction(ctx, jsManagedTooltipPlan, "tooltipPlan", 1));
-    JS_SetPropertyStr(ctx, api, "tooltipNativeReady", JS_NewCFunction(ctx, jsNativeTooltipReady, "tooltipNativeReady", 1));
-    JS_SetPropertyStr(ctx, api, "tooltipJsOverride", JS_NewCFunction(ctx, jsNativeTooltipJavascriptOwner, "tooltipJsOverride", 1));
     JS_SetPropertyStr(ctx, api, "managedAvailable",
                       JS_NewCFunction(ctx, jsManagedAvailable, "managedAvailable", 0));
     JS_SetPropertyStr(ctx, api, "hostInfo", JS_NewCFunction(ctx, jsHostInfo, "hostInfo", 0));

@@ -2,7 +2,6 @@
 #include "mods/LoadOrder.h"
 #include "mods/ManifestText.h"
 #include "core/Log.h"
-#include "content/textures/FontPacks.h"
 #include "experiments/csharp/SourceLoader.h"
 #include "content/textures/TexturePacks.h"
 #include "script/bridge/ScriptEngine.h"
@@ -99,8 +98,6 @@ void readManifest(LoadedMod* mod) {
 
 void loadAll(const std::string& modsDir, const std::vector<ModSpec>& enabled) {
     runtime::configureTexturePacks(modsDir, enabled);
-    runtime::configureFontPacks(modsDir, enabled);
-    bl::csharp::resetCSharpSourceModSession();
     registry().clear();
     dirsById().clear();
     BL_INFO("carregando mods de %s (%zu habilitados)", modsDir.c_str(), enabled.size());

@@ -1,16 +1,12 @@
-#include <limits>
-#include "il2cpp/GuardedCall.h"
 #include "experiments/csharp/NativeDefaults.h"
 #include "experiments/csharp/SourceLimits.h"
 #include "experiments/csharp/NativeBasicItems.h"
-#include "experiments/csharp/NativeRarityGameplay.h"
 #include "experiments/csharp/NativeArmorPolicies.h"
 #include "experiments/csharp/NativeItemPolicies.h"
 #include "experiments/csharp/ManagedPrefixBridge.h"
 #include "experiments/csharp/ManagedPrefixGameplay.h"
 #include "content/items/ModItems.h"
 #include "content/tiles/ModTiles.h"
-#include "content/walls/ModWalls.h"
 #include "content/recipes/NativeRecipes.h"
 #include "content/common/GameRefs.h"
 #include "experiments/csharp/NativeContent.h"
@@ -32,9 +28,6 @@ namespace bl::csharp {
 namespace {
 std::mutex mutex;
 std::map<int,BasicItemEntry> definitions;
-uint64_t nextDefaultsGeneration=0;
-struct EffectiveDefaults { int64_t damage=0,maxStack=1;bool accessory=false; };
-std::map<int,EffectiveDefaults> effectiveDefaults;
 std::map<std::string,PendingBasicRecipe> recipes;
 std::string lastRecipeKey;
 int lastBehaviorType=-1;
@@ -48,13 +41,9 @@ struct IntegerField { int offset=-1; int bytes=0; int64_t min=0,max=0; };
 std::array<IntegerField,BasicFieldCount-1> integerFields{};
 struct EquipSlot { IntegerField field; int value=-1; };
 std::map<int,std::map<std::string,EquipSlot>> equipSlots;
-struct DefenseDefault { IntegerField field; int value=0; bool inheritVanilla=false; };
-std::map<int,DefenseDefault> defenseDefaults;
+std::map<int,EquipSlot> defenseDefaults;
 std::array<IntegerField,2> placementFields{};
 bool placementPrepared=false;
-IntegerField wallPlacementField{};
-bool wallPlacementPrepared=false;
-const MethodInfo* wallDefaultMethod=nullptr;
 std::map<int,std::string> placementErrors;
 int lastPlacementType=-1;
 
@@ -168,25 +157,6 @@ bool preparePlacement(std::string* error) {
     placementFields=resolved;placementPrepared=true;return true;
 }
 
-bool prepareWallPlacement(std::string* error) {
-    if(wallPlacementPrepared)return true;
-    auto& a=il2cpp::api();auto* cls=il2cpp::findClass({"Terraria","Item",{}});
-    auto* field=cls?il2cpp::findField(cls,"createWall"):nullptr;
-    auto* type=field?a.class_from_il2cpp_type(a.field_get_type(field)):nullptr;
-    IntegerField resolved{};
-    if(!field||(a.field_get_flags(field)&0x10u)||!integerContract(type,&resolved)) {
-        *error="API=DefaultToPlaceableWall Stage=BindPlacement Field=createWall Expected=InstanceIntegral Actual="+
-            std::string(type?a.class_get_name(type):"Missing")+" Reason=NativeTypeOrStorageMismatch";return false;
-    }
-    const auto offset=a.field_get_offset(field);resolved.offset=offset<=INT32_MAX?static_cast<int>(offset):-1;
-    if(!instanceBounds(cls,resolved.offset,resolved.bytes,"createWall",error))return false;
-    const auto* helper=il2cpp::findMethodBySignature(cls,il2cpp::parseSignature("void DefaultToPlaceableWall(ushort wallToPlace)"));
-    if(!helper||!a.method_is_instance||!a.method_is_instance(helper)||!a.runtime_invoke||!il2cpp::methodPointer(helper)) {
-        *error="API=DefaultToPlaceableWall Stage=BindPlacement Expected=Instance:void(ushort) Actual=MissingOrIncompatible Reason=NativeMethodContractMismatch";return false;
-    }
-    wallDefaultMethod=helper;wallPlacementField=resolved;wallPlacementPrepared=true;return true;
-}
-
 struct NativeAccessoryWrite { int offset=-1; float value=0; uint8_t kind=0; };
 using NativeAccessoryTable=std::map<int,std::vector<NativeAccessoryWrite>>;
 std::shared_ptr<const NativeAccessoryTable> nativeAccessoryTable;
@@ -231,16 +201,14 @@ void resolvePlacements() {
         if(it==definitions.end())it=definitions.begin();
         auto& entry=it->second;lastPlacementType=it->first;++it;
         if(!entry.placeable||entry.placeTileKey.empty()||entry.placeTile>=0)continue;
-        ++processed;const int target=entry.wallPlaceable?runtime::modWallTypeByKey(entry.placeTileKey):runtime::modTileTypeByKey(entry.placeTileKey);
-        const auto limit=entry.wallPlaceable?wallPlacementField.max:placementFields[0].max;
-        std::string reason=target<0?"MissingDependency":target>=(entry.wallPlaceable?runtime::wallTypeCount():runtime::tileTypeCount())?"DependencyNotInstalled":
-            target>std::min<int64_t>(limit,entry.wallPlaceable?65535:INT32_MAX)?"NativeRangeExceeded":
-            entry.wallPlaceable&&!runtime::modWallAssetReady(target)?"NativeWallAssetUnavailable":"";
+        ++processed;const int target=runtime::modTileTypeByKey(entry.placeTileKey);
+        std::string reason=target<0?"MissingDependency":target>=runtime::tileTypeCount()?"DependencyNotInstalled":
+            target>placementFields[0].max?"NativeRangeExceeded":"";
         if(!reason.empty()) {
             auto message="[CSharp]["+std::string(reason=="NativeRangeExceeded"?"ERROR":"WARN")+
                 "][Placement] Mod="+entry.modId+" Class="+entry.name+" File="+entry.sourceFile+
-                " API=DefaultToPlaceable"+std::string(entry.wallPlaceable?"Wall":"Tile")+" ContentId="+std::to_string(entry.type)+" Key="+entry.placeTileKey+
-                " Stage=ResolvePlacement Expected=InstalledContentWithinNativeRange Actual="+std::to_string(target)+
+                " API=DefaultToPlaceableTile ContentId="+std::to_string(entry.type)+" Tile="+entry.placeTileKey+
+                " Stage=ResolveTile Expected=InstalledTileWithinNativeRange Actual="+std::to_string(target)+
                 " Result=PlacementDisabled Reason="+reason;
             if(placementErrors[entry.type]!=message){placementErrors[entry.type]=message;
                 if(reason=="NativeRangeExceeded")BL_ERROR("%s",message.c_str());else BL_DEBUG("%s",message.c_str());}
@@ -513,11 +481,11 @@ bool applyNativeBasicItemDefaults(const std::string& modId,const std::vector<Bas
         if(!definitions.contains(entry.type)||runtime::modItemKey(entry.type)!=modId+"/"+entry.name||
            !validateBasicItem(entry,error)||!fitIntegerFields(entry,error)||!cacheSound(entry.useSound,error)) {if(error->empty())*error=entry.name+": item nao pertence ao mod";return false;}
         if(entry.placeable) {
-            if(!(entry.wallPlaceable?prepareWallPlacement(error):preparePlacement(error))) {
+            if(!preparePlacement(error)) {
                 *error="[CSharp][ERROR][Placement] Mod="+modId+" Class="+entry.name+
                     " File="+definitions.at(entry.type).sourceFile+" ContentId="+std::to_string(entry.type)+" Detail="+*error;return false;
             }
-            if(entry.placeTile>std::min<int64_t>(entry.wallPlaceable?wallPlacementField.max:placementFields[0].max,entry.wallPlaceable?65535:INT32_MAX)||(!entry.wallPlaceable&&entry.placeStyle>placementFields[1].max)) {
+            if(entry.placeTile>placementFields[0].max||entry.placeStyle>placementFields[1].max) {
                 *error="[CSharp][ERROR][Placement] Mod="+modId+" Class="+entry.name+
                     " Stage=BindPlacement Expected=ValuesWithinNativeWidths Actual=Tile:"+std::to_string(entry.placeTile)+
                     ",Style:"+std::to_string(entry.placeStyle)+" Result=Rejected Reason=NativeRangeExceeded";return false;
@@ -553,8 +521,6 @@ bool applyNativeBasicItemDefaults(const std::string& modId,const std::vector<Bas
         entry.modDir=definitions.at(entry.type).modDir;
         entry.sourceFile=definitions.at(entry.type).sourceFile;entry.modId=modId;
     }
-    const uint64_t defaultsGeneration=++nextDefaultsGeneration;
-    for(auto& entry:resolved)entry.defaultsGeneration=defaultsGeneration;
     std::shared_ptr<NativeItemPolicyBatch> itemPolicies;
     if(!prepareNativeItemPolicies(resolved,&itemPolicies,error))return false;
     const auto armorBatch=prepareNativeArmorPolicies(modId,resolved,error);
@@ -565,9 +531,6 @@ bool applyNativeBasicItemDefaults(const std::string& modId,const std::vector<Bas
         if(!entry.behavior.empty())behaviorsPending.store(true,std::memory_order_release);
         if(entry.placeable&&!entry.placeTileKey.empty()&&entry.placeTile<0)
             placementsPending.store(true,std::memory_order_release);
-        if(!entry.tooltipPlan.empty())
-            BL_INFO("[CSharp][Tooltip] Stage=PlanStored Class=%s Type=%d Bytes=%zu Result=Ready",
-                entry.name.c_str(),entry.type,entry.tooltipPlan.size());
         if(!entry.tooltip.empty()||!entry.localizedTooltips.empty()) {
             std::vector<std::pair<std::string,std::string>> tooltipLanguages{{"",entry.tooltip}};
             for(const auto& [culture,text]:entry.localizedTooltips)
@@ -579,13 +542,6 @@ bool applyNativeBasicItemDefaults(const std::string& modId,const std::vector<Bas
             recipes.emplace(id,PendingBasicRecipe{id,modId,entry.type,-1,entry.recipes[i],entry.sourceFile,""});
             recipesPending.store(true,std::memory_order_release);
         }
-        // Removing an explicit Defense assignment restores the clone's field,
-        // or zero for a plain item. Keep the validated binding for live instances.
-        if(!entry.defenseSpecified&&entry.defense==0) {
-            const auto old=defenseDefaults.find(entry.type);
-            if(old!=defenseDefaults.end()) {old->second.value=0;old->second.inheritVanilla=true;}
-        }
-        effectiveDefaults.erase(entry.type);
         definitions[entry.type]=std::move(entry);
     }
     std::atomic_store_explicit(&nativeAccessoryTable,
@@ -672,11 +628,11 @@ bool setBasicItemDefense(int type,int value,std::string* error) {
     binding.offset=static_cast<int>(offset);
     if(value>binding.max)return reject("ValueOutOfNativeRange",actual?actual:"Unknown");
     const auto existing=defenseDefaults.find(type);
-    if(existing!=defenseDefaults.end()&&existing->second.value==value&&!existing->second.inheritVanilla&&
+    if(existing!=defenseDefaults.end()&&existing->second.value==value&&
        existing->second.field.offset==binding.offset&&existing->second.field.bytes==binding.bytes) {
         error->clear();return true;
     }
-    defenseDefaults[type]={binding,value,false};
+    defenseDefaults[type]={binding,value};
     refreshReason.store("NativeDefenseChanged",std::memory_order_release);
     instancesPending.store(true,std::memory_order_release);
     error->clear();return true;
@@ -733,54 +689,18 @@ bool setBasicItemEquipSlot(int type,const std::string& kind,int slot,std::string
     return true;
 }
 
-namespace {
-int64_t readBoundInteger(const Il2CppObject* object,const IntegerField& field) {
-    const auto* data=reinterpret_cast<const unsigned char*>(object)+field.offset;
-    if(field.bytes==1) {if(field.min<0){int8_t value;std::memcpy(&value,data,1);return value;}uint8_t value;std::memcpy(&value,data,1);return value;}
-    if(field.bytes==2) {if(field.min<0){int16_t value;std::memcpy(&value,data,2);return value;}uint16_t value;std::memcpy(&value,data,2);return value;}
-    if(field.min<0){int32_t value;std::memcpy(&value,data,4);return value;}
-    uint32_t value;std::memcpy(&value,data,4);return value;
-}
-struct EffectiveDefaultsAfter {
-    Il2CppObject* object;int type;uint64_t generation=0;bool complete=false;
-    ~EffectiveDefaultsAfter() {
-        if(!complete||!object)return;
-        std::lock_guard lock(mutex);const auto entry=definitions.find(type);
-        if(entry==definitions.end()||entry->second.defaultsGeneration!=generation)return;
-        effectiveDefaults[type]={readBoundInteger(object,integerFields[BasicDamage]),
-            readBoundInteger(object,integerFields[BasicMaxStack]),runtime::field<uint8_t>(object,flagOffsets[5])!=0};
-    }
-};
-}
 bool applyBasicItemToObject(Il2CppObject* object,int type) {
-    // Destruction order: release the basic lock, apply NativeDefaults/custom
-    // sound, then classify the actual defaults. Never cache a stale revision.
-    EffectiveDefaultsAfter effective{object,type};
     NativeDefaultsAfter nativeDefaults{object,false,type};
     std::lock_guard lock(mutex);const auto found=definitions.find(type);
     if(found==definitions.end()||!object)return false;
-    const auto& entry=found->second;effective.generation=entry.defaultsGeneration;
-    if(entry.wallPlaceable) {
-        uint16_t target=static_cast<uint16_t>(std::max(0,entry.placeTile));
-        void* args[]={&target};Il2CppObject* exception=nullptr;
-        il2cpp::api().runtime_invoke(wallDefaultMethod,object,args,&exception);
-        if(exception) {
-            BL_ERROR("[CSharp][ERROR][NativeItem] Mod=%s Class=%s File=%s ContentId=%d API=DefaultToPlaceableWall Stage=Invoke Result=Rejected Reason=NativeException Exception=%s",entry.modId.c_str(),entry.name.c_str(),entry.sourceFile.c_str(),type,il2cpp::describeException(exception).c_str());
-            return false;
-        }
-    }
+    const auto& entry=found->second;
     const bool cloned=applyNativeItemPolicyDefaults(object,type);
     if(entry.placeable) {
-        if(entry.wallPlaceable)writeIntegral(object,wallPlacementField,std::max(0,entry.placeTile));
-        else {
-            writeIntegral(object,placementFields[0],entry.placeTile);
-            writeIntegral(object,placementFields[1],entry.placeStyle);
-        }
+        writeIntegral(object,placementFields[0],entry.placeTile);
+        writeIntegral(object,placementFields[1],entry.placeStyle);
     }
     for(size_t i=0;i<integerFields.size();++i) {
-        if(entry.wallPlaceable&&(entry.wallIntegerOverrides&(1<<i))==0)continue;
-        if(cloned&&entry.cloneOverridesSpecified&&(entry.cloneIntegerOverrides&(1<<i))==0)continue;
-        if(cloned&&!entry.cloneOverridesSpecified&&i<2&&entry.values[i]==0)continue;
+        if(cloned&&i<2&&entry.values[i]==0)continue;
         const auto& field=integerFields[i];auto* destination=reinterpret_cast<unsigned char*>(object)+field.offset;
         // Converter antes de copiar: jamais escrever quatro bytes em Byte/Int16.
         switch(field.bytes) {
@@ -789,13 +709,9 @@ bool applyBasicItemToObject(Il2CppObject* object,int type) {
             case 4: {const auto value=static_cast<uint32_t>(entry.values[i]);std::memcpy(destination,&value,4);break;}
         }
     }
-    for(size_t i=0;i<flagOffsets.size();++i) {
-        if(entry.wallPlaceable&&(entry.wallFlagOverrides&(1<<i))==0)continue;
-        if(cloned&&entry.cloneOverridesSpecified&&(entry.cloneFlagOverrides&(1<<i))==0)continue;
-        runtime::field<uint8_t>(object,flagOffsets[i])=!!(entry.values[BasicFlags]&(1<<i));
-    }
+    for(size_t i=0;i<flagOffsets.size();++i)runtime::field<uint8_t>(object,flagOffsets[i])=!!(entry.values[BasicFlags]&(1<<i));
     const auto defense=defenseDefaults.find(type);
-    if(defense!=defenseDefaults.end()&&(!defense->second.inheritVanilla||!cloned)) {
+    if(defense!=defenseDefaults.end()) {
         const auto& value=defense->second;
         auto* destination=reinterpret_cast<unsigned char*>(object)+value.field.offset;
         switch(value.field.bytes) {
@@ -813,10 +729,9 @@ bool applyBasicItemToObject(Il2CppObject* object,int type) {
             case 4: {const auto v=static_cast<uint32_t>(slot.value);std::memcpy(destination,&v,4);break;}
         }
     }
-    if(!cloned||!entry.cloneOverridesSpecified||entry.cloneKnockBackOverride)
-        runtime::field<float>(object,knockBackOffset)=entry.knockBack;
+    runtime::field<float>(object,knockBackOffset)=entry.knockBack;
     auto& api=il2cpp::api();auto* destination=reinterpret_cast<unsigned char*>(object)+soundOffset;
-    if(!cloned||!entry.useSound.empty()||(entry.cloneOverridesSpecified&&entry.cloneUseSoundOverride))std::memset(destination,0,static_cast<size_t>(soundSize));
+    if(!cloned||!entry.useSound.empty())std::memset(destination,0,static_cast<size_t>(soundSize));
     if(!entry.useSound.empty()) {
         const auto& bytes=soundCache.at(entry.useSound);
         std::memcpy(destination,bytes.data(),bytes.size());
@@ -826,7 +741,6 @@ bool applyBasicItemToObject(Il2CppObject* object,int type) {
             api.gc_wbarrier_set_field(object,reinterpret_cast<void**>(destination+offset),value);
         }
     }
-    effective.complete=true;
     return true;
 }
 void applyBasicItemAccessoryEffects(Il2CppObject* player,int itemType) {
@@ -852,35 +766,7 @@ void applyBasicItemAccessoryEffects(Il2CppObject* player,int itemType) {
         else std::memcpy(target,&results[i],sizeof(float));
     }
 }
-std::string basicItemTooltipPlan(int type) {
-    std::lock_guard lock(mutex);
-    const auto it=definitions.find(type);
-    return it==definitions.end()?std::string{}:it->second.tooltipPlan;
-}
-bool hasNativeTooltipPlans() {
-    std::lock_guard lock(mutex);
-    for(const auto& [type,entry]:definitions) {
-        (void)type;
-        if(entry.nativeTooltip)return true;
-    }
-    return false;
-}
-std::optional<NativeTooltipPlan> basicItemNativeTooltip(int type) {
-    std::lock_guard lock(mutex);
-    const auto it=definitions.find(type);
-    return it==definitions.end()?std::nullopt:it->second.nativeTooltip;
-}
-void retireBasicItemTooltipsForMod(const std::string& modId) {
-    std::lock_guard lock(mutex);
-    for(auto& [type,entry]:definitions) {
-        (void)type;
-        if(entry.modId!=modId)continue;
-        entry.tooltipPlan.clear();
-        entry.nativeTooltip.reset();
-    }
-}
-
-bool basicItemIsAccessory(int type) {std::lock_guard lock(mutex);const auto live=effectiveDefaults.find(type);if(live!=effectiveDefaults.end())return live->second.accessory;auto it=definitions.find(type);return it!=definitions.end()&&(it->second.values[BasicFlags]&32);}
+bool basicItemIsAccessory(int type) {std::lock_guard lock(mutex);auto it=definitions.find(type);return it!=definitions.end()&&(it->second.values[BasicFlags]&32);}
 std::vector<BasicItemEntry> pendingBasicItemBehaviors() {
     std::lock_guard lock(mutex);std::vector<BasicItemEntry> out;
     auto cursor=definitions.upper_bound(lastBehaviorType);
@@ -893,16 +779,16 @@ std::vector<BasicItemEntry> pendingBasicItemBehaviors() {
     }
     return out;
 }
-bool acknowledgeBasicItemBehavior(int type,const std::string& error,uint64_t expectedGeneration) {
+bool acknowledgeBasicItemBehavior(int type,const std::string& error) {
     std::lock_guard lock(mutex);auto it=definitions.find(type);
-    if(it==definitions.end()||(expectedGeneration!=0&&it->second.defaultsGeneration!=expectedGeneration)||it->second.behavior.empty()||(it->second.behaviorInstalled&&error.empty()))return false;
+    if(it==definitions.end()||it->second.behavior.empty()||(it->second.behaviorInstalled&&error.empty()))return false;
     it->second.behaviorError=error.substr(0,1000);
     if(error.empty())it->second.behaviorInstalled=true;
     bool pending=false;
     for(const auto& [id,entry]:definitions)if(!entry.behavior.empty()&&!entry.behaviorInstalled){pending=true;break;}
     behaviorsPending.store(pending,std::memory_order_release);return true;
 }
-bool basicItemHasDamage(int type) {std::lock_guard lock(mutex);const auto live=effectiveDefaults.find(type);if(live!=effectiveDefaults.end())return live->second.damage>0&&live->second.maxStack==1;auto it=definitions.find(type);return it!=definitions.end()&&it->second.values[BasicDamage]>0&&it->second.values[BasicMaxStack]==1;}
+bool basicItemHasDamage(int type) {std::lock_guard lock(mutex);auto it=definitions.find(type);return it!=definitions.end()&&it->second.values[BasicDamage]>0&&it->second.values[BasicMaxStack]==1;}
 bool isBasicItem(int type) {std::lock_guard lock(mutex);return definitions.contains(type);}
 bool basicItemPolicyReady(int type) {
     std::lock_guard lock(mutex);const auto it=definitions.find(type);
@@ -930,38 +816,8 @@ std::vector<int> basicItemTypes() {std::lock_guard lock(mutex);std::vector<int> 
 int basicItemForTile(const std::string& key) {
     std::lock_guard lock(mutex);
     for (const auto& [id, entry] : definitions)
-        if (entry.placeable && !entry.wallPlaceable && entry.placeStyle == 0 && entry.placeTileKey == key)
+        if (entry.placeable && entry.placeStyle == 0 && entry.placeTileKey == key)
             return id;
-    return -1;
-}
-
-int basicItemForTileStyle(const std::string& key,int style) {
-    std::lock_guard lock(mutex);
-    using StyleIndex=std::pair<int,std::map<int,int>>;
-    static std::map<std::string,StyleIndex> index;
-    static unsigned indexedGeneration=std::numeric_limits<unsigned>::max();
-    const unsigned current=contentGeneration.load(std::memory_order_acquire);
-    if(indexedGeneration!=current) {
-        index.clear();
-        for(const auto& [id,entry]:definitions) {
-            if(!entry.placeable||entry.wallPlaceable||entry.placeTileKey.empty())continue;
-            auto& row=index[entry.placeTileKey];
-            if(row.first==0)row.first=id;
-            row.second.try_emplace(entry.placeStyle,id);
-        }
-        indexedGeneration=current;
-    }
-    const auto row=index.find(key);
-    if(row==index.end())return -1;
-    const auto match=row->second.second.find(style);
-    return match!=row->second.second.end()?match->second:row->second.first;
-}
-
-
-int basicItemForWall(const std::string& key) {
-    std::lock_guard lock(mutex);
-    for(const auto& [type,entry]:definitions)
-        if(entry.placeable&&entry.wallPlaceable&&entry.placeTileKey==key)return type;
     return -1;
 }
 
@@ -999,7 +855,6 @@ bool hasManagedRecipeCallbacks(const std::string& modId) {
 }
 void pumpBasicRecipesOnGameThread() {
     pumpNativeArmorPoliciesOnGameThread();
-    pumpNativeTooltipGameplay();
     static unsigned ticks=0, knownGeneration=0, fastPasses=0;
     const unsigned generation=contentGeneration.load(std::memory_order_acquire);
     if(generation!=knownGeneration) {

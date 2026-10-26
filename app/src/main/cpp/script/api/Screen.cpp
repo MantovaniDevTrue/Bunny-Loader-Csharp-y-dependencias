@@ -2,7 +2,6 @@
 
 #if BL_HAVE_QUICKJS
 #include "graphics/GlHooks.h"
-#include "graphics/GpuTimer.h"
 #include "graphics/RenderHook.h"
 #include "graphics/ShaderRegistry.h"
 #include "graphics/TextureRegistry.h"
@@ -225,7 +224,6 @@ JSValue screen_saveNeutralLut(JSContext* ctx, JSValueConst, int argc, JSValueCon
 }
 
 JSValue screen_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    graphics::GpuTimer::Enable();
     const graphics::RenderStats s = graphics::renderStats();
     JSValue o = JS_NewObject(ctx);
     auto i64 = [&](const char* name, int64_t v) { JS_SetPropertyStr(ctx, o, name, JS_NewInt64(ctx, v)); };

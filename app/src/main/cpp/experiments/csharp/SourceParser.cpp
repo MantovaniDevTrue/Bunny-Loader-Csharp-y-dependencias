@@ -1,6 +1,5 @@
 #include "experiments/csharp/SourceParser.h"
 #include "experiments/csharp/SourceLimits.h"
-#include "experiments/csharp/SourceContentKinds.generated.h"
 
 #include <cctype>
 #include <string>
@@ -14,76 +13,6 @@ struct Token {
     int line;
     bool literal;
 };
-
-// Discovery only needs to skip expressions. Roslyn remains responsible for
-// evaluating interpolations; their text must never become registration metadata
-// or introduce apparent classes/members into the bootstrap token stream.
-bool skipStringExpression(const std::string& source, size_t* cursor, int* line,
-                          std::string* error, unsigned depth = 0) {
-    if (depth > 64) { *error = "string C# excede limite de aninhamento"; return false; }
-    size_t& i = *cursor;
-    bool interpolation = false, verbatim = false;
-    while (i < source.size() && (source[i] == '$' || source[i] == '@')) {
-        if (source[i] == '$') interpolation = true; else verbatim = true;
-        ++i;
-    }
-    if (i >= source.size() || (source[i] != '"' && source[i] != '\'')) {
-        *error = "prefixo de string C# invalido"; return false;
-    }
-    const char quote = source[i++];
-    unsigned braces = 0;
-    while (i < source.size()) {
-        const char ch = source[i];
-        if (braces) {
-            if (ch == '"' || ch == '\'' || ch == '$' ||
-                (ch == '@' && i + 1 < source.size() &&
-                 (source[i + 1] == '"' || source[i + 1] == '$'))) {
-                if (!skipStringExpression(source, &i, line, error, depth + 1)) return false;
-                continue;
-            }
-            if (ch == '/' && i + 1 < source.size() && source[i + 1] == '/') {
-                i += 2;
-                while (i < source.size() && source[i] != '\n') ++i;
-                continue;
-            }
-            if (ch == '/' && i + 1 < source.size() && source[i + 1] == '*') {
-                i += 2;
-                while (i + 1 < source.size() && !(source[i] == '*' && source[i + 1] == '/')) {
-                    if (source[i++] == '\n') ++*line;
-                }
-                if (i + 1 >= source.size()) { *error = "comentario C# sem fechamento"; return false; }
-                i += 2;
-                continue;
-            }
-            if (ch == '{') ++braces;
-            if (ch == '}') --braces;
-            if (ch == '\n') ++*line;
-            ++i;
-            continue;
-        }
-        if (ch == quote) {
-            ++i;
-            if (verbatim && i < source.size() && source[i] == quote) { ++i; continue; }
-            return true;
-        }
-        if (!verbatim && ch == '\\') {
-            i += 2;
-            continue;
-        }
-        if (ch == '\n') {
-            if (!verbatim) { *error = "string C# multilinha nao suportada"; return false; }
-            ++*line;
-        }
-        if (interpolation && (ch == '{' || ch == '}')) {
-            if (i + 1 < source.size() && source[i + 1] == ch) { i += 2; continue; }
-            if (ch == '}') { *error = "interpolacao C# sem abertura"; return false; }
-            braces = 1;
-        }
-        ++i;
-    }
-    *error = "string C# nao terminada";
-    return false;
-}
 
 bool tokenize(const std::string& source, std::vector<Token>* out, std::string* error) {
     int line = 1;
@@ -135,14 +64,6 @@ bool tokenize(const std::string& source, std::vector<Token>* out, std::string* e
             out->push_back({source.substr(start, i - start), line, false});
             continue;
         }
-        if ((c == '$' && i + 1 < source.size() &&
-             (source[i + 1] == '"' || source[i + 1] == '@')) ||
-            (c == '@' && i + 1 < source.size() && source[i + 1] == '$')) {
-            const int at = line;
-            if (!skipStringExpression(source, &i, &line, error)) return false;
-            out->push_back({"<interpolated-string>", at, false});
-            continue;
-        }
         if (c == '"') {
             const int at = line;
             ++i;
@@ -182,7 +103,6 @@ size_t closing(const std::vector<Token>& tokens, size_t open, const std::string&
     if (open >= tokens.size() || tokens[open].value != begin) return tokens.size();
     int level = 0;
     for (size_t i = open; i < tokens.size(); ++i) {
-        if (tokens[i].literal) continue;
         if (tokens[i].value == begin) ++level;
         if (tokens[i].value == end && --level == 0) return i;
     }
@@ -192,6 +112,7 @@ size_t closing(const std::vector<Token>& tokens, size_t open, const std::string&
 bool contentDeclaration(const std::vector<Token>& tokens, size_t first, size_t last,
                         std::string* base, std::map<std::string, std::string>* properties,
                         std::string* error,std::vector<std::pair<std::string,std::string>>* localizedNames) {
+    const std::string kinds = "|Item|Tile|Weapon|Projectile|Buff|BuffPotion|Accessory|Player|NPC|Prefix|";
     for (size_t i = first; i < last; ++i) {
         if(!tokens[i].literal&&(tokens[i].value=="BunnyName"||tokens[i].value=="BunnyNameAttribute")) {
             if(i+6>=last||tokens[i+1].value!="("||!tokens[i+2].literal||tokens[i+3].value!=","||!tokens[i+4].literal||tokens[i+5].value!=")"||tokens[i+6].value!="]") {
@@ -209,7 +130,7 @@ bool contentDeclaration(const std::vector<Token>& tokens, size_t first, size_t l
             tokens[i].value != "BunnyContentAttribute")) continue;
         if (i + 10 >= last || tokens[i + 1].value != "(" ||
             tokens[i + 2].value != "BunnyContentKind" || tokens[i + 3].value != "." ||
-            !isKnownSourceKind(tokens[i + 4].value) ||
+            kinds.find("|" + tokens[i + 4].value + "|") == std::string::npos ||
             tokens[i + 5].value != "," || !tokens[i + 6].literal ||
             tokens[i + 7].value != "," || !tokens[i + 8].literal ||
             tokens[i + 9].value != ")" || tokens[i + 10].value != "]" || !base->empty()) {
@@ -229,28 +150,18 @@ bool contentDeclaration(const std::vector<Token>& tokens, size_t first, size_t l
 bool statements(const std::vector<Token>& ts, size_t first, size_t last,
                 ParsedSourceType* def, std::string* error) {
     for (size_t i = first; i < last;) {
-        // Bootstrap discovery is not a C# interpreter. Calls (including generic
-        // SDK helpers) run in the authoritative Mono SetDefaults invocation.
-        // Keep scanning afterwards: Shoot/Buff still reserve native dependencies.
-        size_t call = i;
-        while (call < last && (ts[call].value == "." || ts[call].value == "<" ||
-               ts[call].value == ">" || ts[call].value == "," ||
-               (!ts[call].literal && !ts[call].value.empty() &&
-                (std::isalnum(static_cast<unsigned char>(ts[call].value[0])) ||
-                 ts[call].value[0] == '_')))) ++call;
-        if (call < last && ts[call].value == "(") {
-            const size_t end = closing(ts, call, "(", ")");
-            if (end < last && end + 1 < last && ts[end + 1].value == ";") {
-                i = end + 2;
-                continue;
-            }
-        }
         // These optional descriptors are executed by Mono; legacy metadata
         // extraction must not try to interpret constructor/fluent-call syntax.
         if(ts[i].value=="NativeDefaults"||ts[i].value=="Holdout") {
             size_t end=i;int parentheses=0;
             for(;end<last;++end){if(ts[end].value=="(")++parentheses;if(ts[end].value==")")--parentheses;if(ts[end].value==";"&&parentheses==0)break;}
             if(end==last){*error="descritor C# sem termino";return false;}i=end+1;continue;
+        }
+        if (i + 5 < last && ts[i].value == "base" && ts[i + 1].value == "." &&
+            ts[i + 2].value == "SetDefaults" && ts[i + 3].value == "(" &&
+            ts[i + 4].value == ")" && ts[i + 5].value == ";") {
+            *error = "base.SetDefaults exige BunnyItem/BunnyTile; outras categorias usam defaults literais completos";
+            return false;
         }
         const std::string key = ts[i++].value;
         if (i >= last || ts[i++].value != "=") {
@@ -261,11 +172,6 @@ bool statements(const std::vector<Token>& ts, size_t first, size_t last,
         bool negative = false;
         if (i < last && ts[i].value == "-") { negative = true; ++i; }
         if (i >= last) return false;
-        if ((key == "Texture" || key == "DisplayName") &&
-            !ts[i].literal && ts[i].value == "<interpolated-string>") {
-            *error = key + " precisa de string literal para registro antecipado";
-            return false;
-        }
         std::string value;
         if (ts[i].value == "nameof" && i + 3 < last &&
             ts[i + 1].value == "(" && ts[i + 3].value == ")") {
@@ -274,31 +180,7 @@ bool statements(const std::vector<Token>& ts, size_t first, size_t last,
         } else {
             value = ts[i++].value;
         }
-        if (def->base == "BunnyMount" && key == "Kind" &&
-            value == "BunnyMountKind" && i + 1 < last &&
-            ts[i].value == "." &&
-            (ts[i + 1].value == "Ride" || ts[i + 1].value == "Minecart")) {
-            value = ts[i + 1].value;
-            i += 2;
-        }
-        if (def->base == "BunnyMount" &&
-            (key == "Standing" || key == "Running" || key == "Flying" ||
-             key == "InAir" || key == "Idle" || key == "Swimming") &&
-            value == "new" && i < last && ts[i].value == "(") {
-            const size_t end = closing(ts, i, "(", ")");
-            if (end >= last) {
-                *error = "BunnyMountFrames requer inicializador terminado";
-                return false;
-            }
-            value = "BunnyMountFrames";
-            i = end + 1;
-        }
         if (key == "Category" && value == "PrefixCategory" &&
-            i + 1 < last && ts[i].value == ".") {
-            value = ts[i + 1].value;
-            i += 2;
-        }
-        if (key == "FishingCatchRules" && value == "BunnyQuestCatchRules" &&
             i + 1 < last && ts[i].value == ".") {
             value = ts[i + 1].value;
             i += 2;
@@ -329,25 +211,17 @@ bool parseClass(const std::vector<Token>& tokens, size_t begin, size_t end,
                 const std::string& namespaceName,
                 std::vector<ParsedSourceType>* definitions, std::string* error,
                 const std::map<std::string, std::string>& declaredProperties = {}) {
-    if (base == "BunnyWorldSystem" || base == "BunnyWorldUpdateLoader" || base == "BunnyHookModule") {
-        if (!declaredProperties.empty()) {
-            *error = name + ": sistema gerenciado nao usa BunnyContent";
-            return false;
-        }
-        definitions->push_back({name, base, namespaceName, {}});
-        return true;
-    }
-    if (!isRecognizedSourceBase(base) && base != "BunnyScreenEffect" && base != "BunnyRarity" && base != "BunnyCommand" && base != "BunnyWorldSystem" && base != "BunnyWorldUpdateLoader" && base != "BunnyHookModule") return true;
+    if (base != "BunnyItem" && base != "BunnyProjectile" && base != "BunnyWeapon" &&
+        base != "BunnyBuff" && base != "BunnyBuffPotion" &&
+        base != "BunnyPlayer" && base != "BunnyAccessory" &&
+        base != "BunnyNPC" && base != "BunnyPrefix" && base != "BunnyTile" &&
+        base != "BunnyScreenEffect") return true;
     ParsedSourceType def;
     def.name = name;
     def.base = base;
     def.namespaceName = namespaceName;
     def.properties = declaredProperties;
-    if (base == "BunnyCommand" || base == "BunnyWorldSystem") {
-        definitions->push_back(std::move(def));
-        return true;
-    }
-    bool foundDefaults = base == "BunnyRarity";
+    bool foundDefaults = false;
     size_t member = begin + 1;
     while (member < end) {
         bool advanced = false;
@@ -360,10 +234,10 @@ bool parseClass(const std::vector<Token>& tokens, size_t begin, size_t end,
                     return false;
                 }
                 if (i > member && (tokens[i - 1].value == "SetDefaults" ||
-                    ((base == "BunnyTile" || base == "BunnyDust" || base == "BunnyWall" || base == "BunnyRarity") && tokens[i - 1].value == "SetStaticDefaults")) &&
+                    (base == "BunnyTile" && tokens[i - 1].value == "SetStaticDefaults")) &&
                     parametersEnd == i + 1 && parametersEnd + 1 < end &&
                     tokens[parametersEnd + 1].value == "{") {
-                    if (foundDefaults && base != "BunnyRarity") {
+                    if (foundDefaults) {
                         *error = name + ": SetDefaults duplicado";
                         return false;
                     }
@@ -372,8 +246,7 @@ bool parseClass(const std::vector<Token>& tokens, size_t begin, size_t end,
                         *error = name + ": corpo SetDefaults sem fechamento";
                         return false;
                     }
-                    if (base == "BunnyRarity") {
-                    } else if (base == "BunnyItem" || base == "BunnyTile" || base == "BunnyDust" || base == "BunnyWall" || base == "BunnyProjectile") {
+                    if (base == "BunnyItem" || base == "BunnyTile" || base == "BunnyProjectile") {
                         // So recursos/nomes sao necessarios ANTES do Mono. Todos
                         // os defaults numericos e receitas sao executados em C#;
                         // nao adivinhar expressoes nem descartar a sua funcionalidade.
@@ -471,8 +344,7 @@ bool parseClass(const std::vector<Token>& tokens, size_t begin, size_t end,
 
 bool parseCSharpSource(const std::string& source,
                        std::vector<ParsedSourceType>* definitions,
-                       std::string* error, bool requireContent,
-                       int* localizationModules) {
+                       std::string* error, bool requireContent) {
     if (!definitions || !error || source.size() > kSourceMaxFileBytes) return false;
     std::vector<Token> tokens;
     if (!tokenize(source, &tokens, error)) return false;
@@ -555,13 +427,18 @@ bool parseCSharpSource(const std::string& source,
         if (!contentDeclaration(tokens, declarationStart, i, &declaredBase,
                                 &declaredProperties, error,&localizedNames)) return false;
         if (!declaredBase.empty()) {
-            if (isRecognizedSourceBase(base) && base != declaredBase) {
+            const std::string roots = "|BunnyItem|BunnyTile|BunnyWeapon|BunnyProjectile|BunnyBuff|BunnyBuffPotion|BunnyAccessory|BunnyPlayer|BunnyNPC|BunnyPrefix|";
+            if (roots.find("|" + base + "|") != std::string::npos && base != declaredBase) {
                 *error = name + ": categoria BunnyContent difere da classe base";
                 return false;
             }
             base = declaredBase;
         }
-        if (!abstract && (isRecognizedSourceBase(base) || base == "BunnyScreenEffect" || base == "BunnyRarity" || base == "BunnyCommand" || base == "BunnyWorldSystem" || base == "BunnyWorldUpdateLoader" || base == "BunnyHookModule")) {
+        if (!abstract && (base == "BunnyItem" || base == "BunnyProjectile" || base == "BunnyWeapon" ||
+            base == "BunnyBuff" || base == "BunnyBuffPotion" ||
+            base == "BunnyPlayer" || base == "BunnyAccessory" ||
+            base == "BunnyNPC" || base == "BunnyPrefix" ||
+            base == "BunnyTile" || base == "BunnyScreenEffect")) {
             std::string qualifiedNamespace = fileNamespace;
             for (const auto& scope : namespaces) {
                 if (!qualifiedNamespace.empty()) qualifiedNamespace += ".";
@@ -572,13 +449,11 @@ bool parseCSharpSource(const std::string& source,
             definitions->back().localizedNames=std::move(localizedNames);
             ++found;
         }
-        if (!abstract && base == "BunnyLocalizationModule" && localizationModules)
-            ++*localizationModules;
         i = end;
         declarationStart = end + 1;
     }
     if (found == 0 && requireContent) {
-        *error = "nenhuma classe BunnyItem, BunnyCommand ou outro conteudo Bunny encontrada";
+        *error = "nenhuma classe BunnyItem, BunnyTile ou outro conteudo Bunny encontrada";
         return false;
     }
     return true;

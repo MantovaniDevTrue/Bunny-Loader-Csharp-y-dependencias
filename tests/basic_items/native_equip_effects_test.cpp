@@ -17,8 +17,8 @@ int main(int argc,char** argv) {
         else {
             assert(entry.name=="WaspNest"&&entry.behavior.find("Back")!=std::string::npos);
             assert(entry.behavior.find("\"nativeAccessory\":true")!=std::string::npos);
-            // Isolate StrongBees from the visual policy binder in this fixture.
-            // Native Back rendering is covered by native_item_policies_test.cpp.
+            // Back drawing still uses JS. Isolate StrongBees for this no-QuickJS test;
+            // the original visual descriptor is covered by item_behavior_bridge_test.js.
             mixedBehavior=entry.behavior;entry.behavior.clear();
         }
         entry.type=next++;identities[entry.type]="mod/"+entry.name;

@@ -1,7 +1,6 @@
 #pragma once
 #include <android/log.h>
 #include <string>
-#include <vector>
 
 namespace bl::log {
 
@@ -25,7 +24,6 @@ void write(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3))
 // isto, um mod que quebra vira "nao funcionou" sem texto nenhum.
 std::string errorsSoFar();
 int errorCount();
-std::vector<std::string> takeCSharpLines();
 
 // Chamado a cada BL_ERROR. Quem instala decide o que fazer (mostrar o painel).
 void onError(void (*fn)(const char* line));

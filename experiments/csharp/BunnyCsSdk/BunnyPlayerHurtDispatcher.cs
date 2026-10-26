@@ -11,7 +11,6 @@ public static class BunnyPlayerHurtDispatcher
     {
         public string Id = "";
         public string Path = "";
-        public BunnyModAssemblyLease? Lease;
         public BunnyPlayer[] Players = Array.Empty<BunnyPlayer>();
         public BunnyHookRegistry[] Hooks = Array.Empty<BunnyHookRegistry>();
         public string LastError = "";
@@ -91,12 +90,10 @@ public static class BunnyPlayerHurtDispatcher
         if (Contexts.Count >= 16)
             return -1;
         string currentType = "(assembly)";
-        string currentHook = "SharedAssembly";
-        BunnyModAssemblyLease? lease = null;
+        string currentHook = "LoadFrom";
         try
         {
-            lease = BunnyModAssemblyRegistry.Acquire(modId, assemblyPath);
-            var assembly = lease.Assembly;
+            var assembly = Assembly.LoadFrom(assemblyPath);
             var types = assembly.GetTypes()
                 .Where(type => type.IsClass && !type.IsAbstract &&
                     !type.ContainsGenericParameters && typeof(BunnyPlayer).IsAssignableFrom(type))
@@ -119,10 +116,9 @@ public static class BunnyPlayerHurtDispatcher
                 players[i].RegisterHooks(hookRegistries[i]);
             }
             Contexts.Add(new Context {
-                Id = modId, Path = assemblyPath, Lease = lease,
+                Id = modId, Path = assemblyPath,
                 Players = players, Hooks = hookRegistries
             });
-            lease = null;
             return Contexts.Count - 1;
         }
         catch (Exception error)
@@ -130,7 +126,6 @@ public static class BunnyPlayerHurtDispatcher
             RegistrationError = Describe(modId, currentType, currentHook, error);
             return -1;
         }
-        finally { lease?.Dispose(); }
     }
 
     public static long Modify(int slot, int damage, int direction, int flags,

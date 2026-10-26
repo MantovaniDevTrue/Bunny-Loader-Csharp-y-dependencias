@@ -102,23 +102,15 @@ std::u16string toU16(Il2CppString* s) {
     return std::u16string(reinterpret_cast<const char16_t*>(s->chars), static_cast<size_t>(s->length));
 }
 
-const MethodInfo* g_buffNameOf = nullptr;
-
-std::u16string buffNameOf(int id) {
-    Il2CppObject* exc = nullptr;
-    void* args[1] = {&id};
-    Il2CppObject* r = il2cpp::api().runtime_invoke(g_buffNameOf, nullptr, args, &exc);
-    return exc ? std::u16string() : toU16(reinterpret_cast<Il2CppString*>(r));
-}
-
 void buildBuffs() {
     using namespace il2cpp;
+    auto& a = api();
     Il2CppClass* lang = findClass({"Terraria", "Lang", {}});
-    g_buffNameOf = lang ? findMethodBySignature(
+    const MethodInfo* nameOf = lang ? findMethodBySignature(
         lang, parseSignature("string GetBuffName(int id)")) : nullptr;
     Il2CppClass* main = findClass({"Terraria", "Main", {}});
     Il2CppClass* sets = findClass({"Terraria.ID", "BuffID", "Sets"});
-    if (!g_buffNameOf || !main) {
+    if (!nameOf || !main) {
         BL_WARN("menu: Lang.GetBuffName indisponivel; a aba de buffs fica vazia");
         return;
     }
@@ -134,7 +126,11 @@ void buildBuffs() {
     g_buffNames.assign(static_cast<size_t>(total), std::u16string());
     g_buffClass.assign(static_cast<size_t>(total), kBuffOther);
     for (int id = 1; id < total; ++id) {
-        g_buffNames[static_cast<size_t>(id)] = buffNameOf(id);
+        int t = id;
+        void* args[1] = {&t};
+        Il2CppObject* exc = nullptr;
+        Il2CppObject* r = a.runtime_invoke(nameOf, nullptr, args, &exc);
+        if (!exc) g_buffNames[static_cast<size_t>(id)] = toU16(reinterpret_cast<Il2CppString*>(r));
         uint8_t c;
         if (flagAt(wellFed, id) || flagAt(fed, id)) c = kBuffFood;
         else if (flagAt(flask, id)) c = kBuffFlask;
@@ -159,15 +155,6 @@ void buildMenuCatalogExtras() {
              perNpc[1], perNpc[2], perNpc[3], perNpc[4], perNpc[0], g_buffNames.size(),
              perBuff[1], perBuff[2], perBuff[3], perBuff[4], perBuff[5], perBuff[6]);
 }
-
-std::vector<std::u16string> readBuffNames() {
-    std::vector<std::u16string> names(g_buffNames.size());
-    if (!g_buffNameOf) return names;
-    for (size_t id = 1; id < names.size(); ++id) names[id] = buffNameOf(static_cast<int>(id));
-    return names;
-}
-
-void replaceBuffNames(std::vector<std::u16string>& names) { g_buffNames.swap(names); }
 
 const std::vector<uint8_t>& npcClasses() { return g_npcClass; }
 const std::vector<std::u16string>& buffNames() { return g_buffNames; }

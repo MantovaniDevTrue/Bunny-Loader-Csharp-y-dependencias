@@ -4,15 +4,11 @@ import pathlib
 import sys
 
 expected = {
-    "LOCALE": {4}, "LOCALE_MODULES": {2}, "LOCALE_RUNTIME": {2},
-    "ITEM_RARITY": {3}, "RARITY": {2}, "DUST": {5}, "QUEST_FISH": {6,7}, "QUEST_LOCALE": {5}, "QUEST_CALLBACK": {3}, "QUEST_CATCH": {4},
-    "SHOOT": {3,4}, "USE_SOUND": {8}, "HOLDOUT": {4}, "NATIVE_ITEM": {3}, "NATIVE_PROJECTILE": {3},
+    "USE_SOUND": {8}, "HOLDOUT": {4}, "NATIVE_ITEM": {3}, "NATIVE_PROJECTILE": {3},
     "RECIPES": {4},
-    "ITEM": {20, 21, 22, 23, 24, 25, 26, 27, 28},
-    "TILE": {13, 14, 16, 17, 19, 20, 21, 22, 23, 25, 28, 29},
-    "TREE": {5, 7, 9, 11, 12}, "GORE": {5}, "MOUNT": {3}, "MOUNT_ITEM": {3},
-    "WALL": {16},
-    "PROJECTILE": {8, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 27},
+    "ITEM": {20, 21, 22, 23, 24, 25, 26},
+    "TILE": {13},
+    "PROJECTILE": {8, 12, 13, 14, 16, 17, 18},
     "WEAPON": {6, 9},
     "BUFF": {3, 4, 6, 7},
     "POTION": {4},
@@ -58,19 +54,6 @@ print("BUNNY_MANAGED_DEFAULTS_V2_SCHEMA_PASS", dict(sorted(counts.items())))
 owned = [row.split("\t") for row in rows if row.startswith("RECIPES\t")]
 assert {(f[1], f[2]) for f in owned} == {
     ("ExampleWand", "WEAPON"), ("ExampleFocusAccessory", "ACCESSORY"),
-    ("ExampleMinionItem", "WEAPON")} # Original potion port no longer declares the synthetic recipe.
-expected_recipes = {
-    "ExampleMinionItem": "1,18,mExampleItem:1",
-    "ExampleWand": "1,mExampleWorkbench,mExampleItem:10@4",
-    "ExampleFocusAccessory": "1,mExampleWorkbench,mExampleItem:10@4",
-}
-assert all(f[3] == expected_recipes[f[1]] for f in owned), [(f[1], f[3], expected_recipes[f[1]]) for f in owned if f[3] != expected_recipes[f[1]]]
-mount_items={parts[1]:parts for row in rows if (parts:=row.split("\t"))[0]=="ITEM" and len(parts)>2 and parts[1] in {"ExampleMountItem","ExampleMinecart"}}
-assert len(mount_items)==2,"Both mount items require their own native ITEM recipes"
-for name,recipe in {
-    "ExampleMountItem":"1,mExampleWorkbench,mExampleItem:1",
-    "ExampleMinecart":"1,16,v2343:1,mExampleItem:15",
-}.items():
-    assert recipe in mount_items[name],"Native ITEM row missing original mount recipe: "+name
-    assert sum(value.count(recipe) for value in mount_items[name])==1,"Mount recipe must appear exactly once in native ITEM fields: "+name
+    ("ExampleBuffPotion", "POTION"), ("ExampleMinionItem", "WEAPON")}
+assert all(f[3] == ("1,mExampleWorkbench,mExampleItem:1" if f[1]=="ExampleMinionItem" else "1,mExampleWorkbench,mExampleItem:10@4") for f in owned)
 print("OWNED_RECIPE_CATEGORIES_SCHEMA_PASS")

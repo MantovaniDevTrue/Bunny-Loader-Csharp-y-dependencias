@@ -1,4 +1,3 @@
-#include <array>
 #include "content/common/ContentAssets.h"
 #include "experiments/csharp/NativeContent.h"
 #include "il2cpp/Api.h"
@@ -30,12 +29,7 @@ bool setTableElement(FieldInfo* f,int index,Il2CppObject* value) {
     il2cpp::api().runtime_invoke(set,array,args,&error);return !error;
 }
 }
-namespace bl::runtime {
-int modBuffTypeByName(const std::string&,const std::string&){return 400;}
-}
 namespace bl::csharp {
-bool nativeCostumeRuntimeReady(){return true;}
-const char* nativeCostumeRuntimeDiagnostic(){return "Ready";}
 size_t activeManagedVisualCount(){return testing::visualCommands.size();}
 void visitManagedVisualCommands(int player,void (*visitor)(const ManagedVisualCommand&,void*),void* context,size_t limit){size_t count=0;for(const auto& command:testing::visualCommands)if(player<0||player==command.playerIndex){if(count++==limit)break;visitor(command,context);}}
 std::vector<ManagedNativeEquipTexture> managedNativeEquipTextures(){std::vector<ManagedNativeEquipTexture> out;for(const auto& e:testing::legacyEquips)if(!testing::legacySlots.contains(e.itemType))out.push_back(e);return out;}
@@ -44,9 +38,4 @@ bool setManagedNativeEquipSlot(int type,int,int slot){testing::legacySlots[type]
 }
 namespace bl::mods {const std::string& dirOf(const std::string&) {return testing::modContentRoot;}
 std::string rootOf(const std::string&){const auto& root=testing::modContentRoot;return root.ends_with("/content")?root.substr(0,root.size()-8):root;}
-}
-namespace bl::il2cpp {std::string describeException(Il2CppObject*) {return "FixtureNativeException";}}
-
-namespace bl::csharp {
-bool nativeMountBalloonState(Il2CppObject*,std::array<float,3>*,Il2CppObject**){return false;}
 }

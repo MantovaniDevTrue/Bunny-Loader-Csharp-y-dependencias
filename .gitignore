@@ -86,17 +86,5 @@ exmod_tl/
 app/libs/unity-classes.jar
 app/src/main/res/font/bunny.ttf
 
-# Managed build outputs (keep packaged assets/bin/Data independent).
-/experiments/csharp/**/bin/
-/experiments/csharp/**/obj/
-/tests/**/bin/
-/tests/**/obj/
-
-/tools/sdk_reference/bin/
-/tools/sdk_reference/obj/
-/tools/csharp_contracts/**/bin/
-/tools/csharp_contracts/**/obj/
-**/__pycache__/
-
-# Binarios do Mono e Roslyn distribuidos com o proprio projeto
+# Mono ARM64 incluido na entrega
 !app/src/main/jniLibs/arm64-v8a/*.so

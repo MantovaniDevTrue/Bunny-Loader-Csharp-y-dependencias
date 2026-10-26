@@ -86,8 +86,6 @@ public class CheatBridge {
     /** Nomes vindos da Localization do jogo. null enquanto ainda moem. */
     public static native String[] nItemNames();
     public static native String[] nNpcNames();
-    /** Sobe quando a troca de idioma do jogo rele os nomes; negativa enquanto rele. */
-    public static native int nNamesGeneration();
     /** Quadros da tira de cada NPC (Main.npcFrameCount). */
     public static native int[] nNpcFrames();
     /** Secao de cada item, pelos campos do jogo (runtime::ItemClass). */
@@ -177,13 +175,8 @@ public class CheatBridge {
     /** Sem filtro de classe: o catalogo inteiro. */
     private static final int ALL_CLASSES = -1;
 
-    /**
-     * O que o menu sabe do jogo. Nao muda depois de montado: a troca de idioma
-     * monta outro (ver isStale).
-     */
+    /** O que o menu sabe do jogo. Nao muda depois de montado. */
     private static final class Catalog {
-        /** nNamesGeneration de quando os nomes foram copiados. */
-        int generation;
         String[] itemNames, npcNames;
         /** Os mesmos nomes, minusculos e sem acento, para a busca. */
         String[] itemSearch, npcSearch;
@@ -281,19 +274,11 @@ public class CheatBridge {
      */
     private static Catalog buildCatalog() {
         final long t0 = SystemClock.elapsedRealtime();
-        String[] items, npcs, buffs;
-        int generation;
-        // Uma releitura (troca de idioma) no meio da copia misturaria idiomas:
-        // copia de novo ate a geracao ser a mesma antes e depois.
-        do {
-            while ((generation = nNamesGeneration()) < 0) sleepQuietly(80);
-            while ((items = nItemNames()) == null) sleepQuietly(80);
-            while ((npcs = nNpcNames()) == null) sleepQuietly(80);
-            buffs = nBuffNames();
-        } while (nNamesGeneration() != generation);
+        String[] items, npcs;
+        while ((items = nItemNames()) == null) sleepQuietly(80);
+        while ((npcs = nNpcNames()) == null) sleepQuietly(80);
         final long t1 = SystemClock.elapsedRealtime();
         Catalog c = new Catalog();
-        c.generation = generation;
         c.itemNames = items;
         c.npcNames = npcs;
         c.npcFrames = nNpcFrames();
@@ -304,6 +289,7 @@ public class CheatBridge {
         c.npcByClass = splitGroups(nNpcClasses(), npcs, N_NPC_CLASSES);
         c.itemSearch = normalizeAll(items);
         c.npcSearch = normalizeAll(npcs);
+        String[] buffs = nBuffNames();
         c.buffNames = buffs != null ? buffs : new String[0];
         c.buffSearch = normalizeAll(c.buffNames);
         c.allBuffs = named(c.buffNames);
@@ -311,12 +297,6 @@ public class CheatBridge {
         Log.i("BunnyLoader", "menu: catalogo pronto; esperou o nativo " + (t1 - t0)
             + " ms, montou em " + (SystemClock.elapsedRealtime() - t1) + " ms");
         return c;
-    }
-
-    /** O idioma do jogo mudou depois que o catalogo foi montado. */
-    private static boolean isStale() {
-        Catalog c = sCatalog;
-        return c != null && c.generation != nNamesGeneration();
     }
 
     private static void sleepQuietly(long ms) {
@@ -1731,16 +1711,6 @@ public class CheatBridge {
     }
 
     private static void toggleMenu(Activity act) {
-        // Idioma trocado com o menu fechado: as listas e as secoes guardam o
-        // catalogo velho, entao o menu inteiro e montado de novo.
-        if (sOverlay != null && sOverlay.getVisibility() != View.VISIBLE
-                && !sCatalogLoading && isStale()) {
-            closeSlider();
-            ViewGroup parent = (ViewGroup) sOverlay.getParent();
-            if (parent != null) parent.removeView(sOverlay);
-            sOverlay = null;
-            sCatalog = null;
-        }
         if (sOverlay != null) {
             closeSlider();
             sOverlay.setVisibility(

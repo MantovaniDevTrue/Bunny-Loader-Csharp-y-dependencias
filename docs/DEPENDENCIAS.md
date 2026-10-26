@@ -1,37 +1,37 @@
-# Dependências do Bunny Loader C#
+# Dependências do núcleo C#
 
-Este repositório mantém os fontes e as dependências usadas pela revisão C# integrada de 26/10/2026. Os componentes gerenciados e nativos são versionados juntos para evitar incompatibilidades entre SDK, compilador e host.
+As dependências desta entrega foram extraídas da mesma revisão integrada do Bunny Loader C# (`v1.0`, commit `cfbe784ee3cbc0ba2fabafce56c59e6eac41b67b`).
 
-## Runtime e compilador
+## Runtime e SDK
 
-| Componente | Arquivos |
+| Componente | Localização |
 | --- | --- |
-| Mono ARM64 modificado | [`libmonosgen-2.0.so`](../app/src/main/jniLibs/arm64-v8a/libmonosgen-2.0.so) |
-| Bibliotecas nativas do .NET | [`app/src/main/jniLibs/arm64-v8a/`](../app/src/main/jniLibs/arm64-v8a/) |
-| 175 DLLs gerenciadas | [`app/src/main/assets/managed/`](../app/src/main/assets/managed/) |
-| Roslyn | `Microsoft.CodeAnalysis.dll`, `Microsoft.CodeAnalysis.CSharp.dll`, `BunnySourceCompiler.dll` |
-| SDK de autoria | [`BunnyCsSdk/`](../experiments/csharp/BunnyCsSdk/) e [`BunnySourceSdk/`](../experiments/csharp/BunnySourceSdk/) |
-| Manifesto de integridade | [`framework.sha256`](../app/src/main/assets/managed/framework.sha256) |
-| Código e patches Mono | [`tools/mono/`](../tools/mono/) |
+| MonoVM ARM64 modificado | [`app/src/main/jniLibs/arm64-v8a/`](../app/src/main/jniLibs/arm64-v8a/) |
+| DLLs do framework, Roslyn e SDK | [`app/src/main/assets/managed/`](../app/src/main/assets/managed/) |
+| Código e scripts do Mono | [`tools/mono/`](../tools/mono/) |
+| SDK C# | [`experiments/csharp/BunnyCsSdk/`](../experiments/csharp/BunnyCsSdk/) |
+| Referências dos mods-fonte | [`experiments/csharp/BunnySourceSdk/`](../experiments/csharp/BunnySourceSdk/) |
+| Compilador Roslyn | [`experiments/csharp/BunnySourceCompiler/`](../experiments/csharp/BunnySourceCompiler/) |
+| Worker | [`experiments/csharp/BunnyManagedProbe/`](../experiments/csharp/BunnyManagedProbe/) |
 
-Os projetos `BunnySourceSdk`, `BunnySourceCompiler` e `BunnyManagedProbe` têm como alvo `net8.0`. O `BunnyCsSdk` usa `net10.0` na revisão importada. O compilador declara `Microsoft.CodeAnalysis.CSharp` versão `4.11.0`. O runtime ARM64 foi preparado a partir de Mono/.NET `8.0.23` com correções documentadas em [`tools/mono/README.md`](../tools/mono/README.md).
+As DLLs e as bibliotecas nativas estão presentes nos diretórios utilizados pelo Gradle. A biblioteca Mono modificada possui documentação, licença e hashes em [`tools/mono/`](../tools/mono/).
 
-## Ambiente Android
+## Ambiente de compilação
 
-A configuração Gradle importa código Android/Kotlin, JNI, C++ e hooks IL2CPP. São necessários Android SDK, NDK, CMake, Gradle e Java compatíveis com a configuração do projeto. O NDK indicado em `app/build.gradle.kts` é `30.0.16248370`.
+O projeto Android utiliza Gradle, Kotlin, CMake e NDK, com as versões exigidas pelos arquivos [`build.gradle.kts`](../build.gradle.kts) e [`app/build.gradle.kts`](../app/build.gradle.kts). A integração nativa é destinada ao Android ARM64.
 
-As bibliotecas do Mono fornecidas neste repositório são distintas dos binários proprietários do Terraria, como `libil2cpp.so` e `libunity.so`, que **não estão incluídos**. O host também necessita dos recursos originais do jogo para executá-lo.
+Os projetos C# podem ser inspecionados por meio dos arquivos `.csproj`; sua compilação separada não gera um APK Android.
 
-## Preparação e atualização
+O código original do host Bunny foi mantido, inclusive JNI, hooks IL2CPP, inicialização e recursos necessários ao funcionamento do aplicativo. Remover módulos desse host sem revisar o CMake e o Gradle pode deixar a integração C# incompleta.
 
-O código atual já inclui as DLLs, as bibliotecas Mono ARM64 e os scripts para conferência. Não é preciso baixar essas mesmas dependências novamente para estudar ou reutilizar a revisão.
+## Componentes não incluídos
 
-Para uma recompilação do Mono modificado, consulte [`tools/mono/README.md`](../tools/mono/README.md). Os scripts também explicam a ordem de preparação das DLLs e a instalação da biblioteca corrigida.
+Este repositório **não distribui** `libil2cpp.so`, `libunity.so`, assets proprietários do Terraria/Unity, dumps do jogo, APKs nem chaves de assinatura. O responsável pela compilação precisa fornecer legalmente esses componentes fora do repositório.
 
-Ao atualizar Mono, Roslyn ou o SDK, revise em conjunto as dependências do compilador, os contratos do worker, as bibliotecas ARM64 e o manifesto de hashes. Evite substituir apenas um artefato isolado, pois ele pode deixar de corresponder à revisão dos demais.
+A ausência dos binários do Terraria não indica falta de alguma biblioteca do MonoVM ou do Roslyn. São dependências diferentes.
 
-## Licenças e arquivos externos
+## Atualizações
 
-As licenças gerais e avisos de terceiros estão em [`LICENSE.md`](../LICENSE.md), [`LICENSING.md`](../LICENSING.md) e [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). A licença do Mono acompanha o pacote em [`tools/mono/prebuilt/arm64-v8a/`](../tools/mono/prebuilt/arm64-v8a/).
+Não substitua apenas as DLLs ou o Mono por arquivos de branches recentes. Ao atualizar o suporte C#, os contratos do SDK, o compilador, a JNI, os hooks nativos e as bibliotecas devem acompanhar a mesma revisão.
 
-Não são distribuídos APKs, chaves de assinatura, dumps, bibliotecas proprietárias do Terraria/Unity ou recursos privados do jogo.
+Consulte [Integração](INTEGRACAO.md) e [Versão de origem](../SOURCE_VERSION.md).

@@ -1,0 +1,123 @@
+name: Importar fontes CSharp e dependencias
+
+on:
+  push:
+    paths:
+      - ".github/workflows/import-csharp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: csharp-source-import
+  cancel-in-progress: false
+
+jobs:
+  importar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout do repositorio de destino
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Baixar a revisao exata do projeto CSharp integrado
+        env:
+          SOURCE_SHA: e03e7d8d29405ac23c7b084471d40089f97a1ab9
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/MantovaniDevTrue/Bunnyloader-Csharp.git _source
+          git -C _source fetch --no-tags --depth=1 origin "$SOURCE_SHA"
+          git -C _source checkout --detach "$SOURCE_SHA"
+          test "$(git -C _source rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Organizar codigo CSharp, Android e dependencias
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p app experiments samples tests tools docs gradle
+          rsync -a _source/app/ app/
+          rsync -a _source/experiments/csharp/ experiments/csharp/
+          rsync -a _source/tests/ tests/
+          rsync -a _source/tools/ tools/
+          rsync -a _source/gradle/ gradle/
+          rsync -a _source/docs/csharp/ docs/csharp/
+
+          for entry in _source/samples/*; do
+            [ -d "$entry" ] || continue
+            name="$(basename "$entry")"
+            case "$name" in
+              *CSharp*|NativeAccessProbe|NativePlacementProbe|PureCSharpNativeMod)
+                rsync -a "$entry/" "samples/$name/"
+                ;;
+            esac
+          done
+
+          for entry in \
+            .gitattributes .gitignore \
+            build.gradle.kts settings.gradle.kts gradle.properties \
+            keystore.properties.example \
+            LICENSE.md LICENSING.md THIRD_PARTY_NOTICES.md TRADEMARKS.md \
+            CONTRIBUTING.md SECURITY.md; do
+            if [ -f "_source/$entry" ]; then
+              cp -a "_source/$entry" "$entry"
+            fi
+          done
+
+          for entry in _source/docs/csharp*; do
+            [ -f "$entry" ] || continue
+            cp -a "$entry" docs/
+          done
+
+          printf '\n# Binarios do Mono e Roslyn distribuidos com o proprio projeto\n!app/src/main/jniLibs/arm64-v8a/*.so\n' >> .gitignore
+
+          cat > SOURCE_VERSION.md <<'EOF'
+          # Fonte integrada
+
+          - **Origem:** [MantovaniDevTrue/Bunnyloader-Csharp](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp)
+          - **Revisão utilizada:** \`e03e7d8d29405ac23c7b084471d40089f97a1ab9\`
+          - **Data da revisão:** 26/10/2026
+          - **Destino:** Bunny Loader C# com dependências e projeto Android
+
+          A fonte Android foi mantida nos caminhos originais para preservar os includes, o CMake, os serviços Kotlin/JNI e o empacotamento das DLLs e bibliotecas. O Mono modificado e suas licenças permanecem em \`tools/mono/\` e \`app/src/main/jniLibs/\`.
+
+          Não foram copiados dumps, binários proprietários do Terraria/Unity, recursos privados, tokens, chaves nem APKs. O port de loaders continua em desenvolvimento.
+          EOF
+
+          test -f experiments/csharp/BunnySourceCompiler/BunnySourceCompiler.csproj
+          test -f experiments/csharp/BunnySourceSdk/BunnySourceSdk.csproj
+          test -f experiments/csharp/BunnyCsSdk/BunnyCsSdk.csproj
+          test -f app/src/main/cpp/experiments/csharp/ManagedRuntime.cpp
+          test -f app/src/main/kotlin/dev/bunnyloader/csharp/ManagedProbeService.kt
+          test -f app/src/main/assets/managed/framework.sha256
+          test -f app/src/main/assets/managed/BunnySourceCompiler.dll
+          test -f app/src/main/jniLibs/arm64-v8a/libmonosgen-2.0.so
+          test -f tools/mono/prebuilt/arm64-v8a/DOTNET_RUNTIME_LICENSE.txt
+
+          test ! -e refs
+          test ! -e terraria1456_assets
+          test ! -e app/libs/unity-classes.jar
+          test ! -e app/src/main/res/font/bunny.ttf
+          test ! -e keystore.properties
+
+          find app experiments samples tests tools docs -type f | wc -l
+
+      - name: Registrar fontes no repositorio
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf _source
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git add -f app/src/main/jniLibs/arm64-v8a/*.so
+          if git diff --cached --quiet; then
+            echo "Nenhuma mudanca pendente"
+            exit 0
+          fi
+          git commit -m "feat: import full CSharp runtime, Android host and dependencies"
+          git push origin "HEAD:main"

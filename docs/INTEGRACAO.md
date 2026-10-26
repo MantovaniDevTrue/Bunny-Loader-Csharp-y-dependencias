@@ -1,44 +1,40 @@
-# Integração C# no Bunny Loader
+# Integração do suporte C#
 
-Esta árvore mantém o projeto Android completo junto do suporte C# para que os includes, o CMake, os serviços Kotlin e o carregamento de bibliotecas permaneçam nos caminhos originais.
+Este repositório contém o núcleo C# do Bunny Loader integrado ao projeto Android, na revisão `v1.0` de 19/10/2026. Os arquivos nativos, gerenciados e as bibliotecas de runtime pertencem à mesma revisão.
 
 ## Componentes
 
-| Componente | Localização |
+| Local | Responsabilidade |
 | --- | --- |
-| API de autoria | [`experiments/csharp/BunnyCsSdk/`](../experiments/csharp/BunnyCsSdk/) |
-| SDK de compilação | [`experiments/csharp/BunnySourceSdk/`](../experiments/csharp/BunnySourceSdk/) |
-| Roslyn e cache | [`experiments/csharp/BunnySourceCompiler/`](../experiments/csharp/BunnySourceCompiler/) |
-| Runtime gerenciado | [`experiments/csharp/BunnyManagedProbe/`](../experiments/csharp/BunnyManagedProbe/) |
-| MonoVM, filas e registro nativo | [`app/src/main/cpp/experiments/csharp/`](../app/src/main/cpp/experiments/csharp/) |
-| Inicialização do host | [`app/src/main/cpp/boot/`](../app/src/main/cpp/boot/) |
-| Ligação JNI e serviços Android | [`app/src/main/kotlin/dev/bunnyloader/csharp/`](../app/src/main/kotlin/dev/bunnyloader/csharp/) |
-| Bibliotecas C++ de conteúdo e IL2CPP | [`app/src/main/cpp/`](../app/src/main/cpp/) |
+| [`BunnyCsSdk`](../experiments/csharp/BunnyCsSdk/) | API pública dos mods |
+| [`BunnySourceSdk`](../experiments/csharp/BunnySourceSdk/) | Referências e contratos |
+| [`BunnySourceCompiler`](../experiments/csharp/BunnySourceCompiler/) | Compilação Roslyn |
+| [`BunnyManagedProbe`](../experiments/csharp/BunnyManagedProbe/) | Worker gerenciado |
+| [`ManagedRuntime.cpp`](../app/src/main/cpp/experiments/csharp/ManagedRuntime.cpp) | Ponte de execução MonoVM |
+| [`AutoSourceRuntime.cpp`](../app/src/main/cpp/experiments/csharp/AutoSourceRuntime.cpp) | Descoberta, preparação e carregamento das fontes |
+| [`ManagedProbeService.kt`](../app/src/main/kotlin/dev/bunnyloader/csharp/ManagedProbeService.kt) | Serviço Android C# |
+| [`CMakeLists.txt`](../app/src/main/cpp/CMakeLists.txt) | Integração do código nativo com o host |
 
-## Funcionamento
+## Fluxo
 
-1. O Bunny Loader descobre os mods, registra suas informações e prepara o runtime C#.
-2. O compilador Roslyn carrega as referências do SDK, compila as fontes dos mods e utiliza o cache quando aplicável.
-3. O worker MonoVM carrega e executa as classes gerenciadas.
-4. A ponte JNI/C++ comunica o runtime gerenciado com o host do Terraria Android.
-5. Registradores de conteúdo, hooks, filas e callbacks conectam classes C# aos métodos e estruturas nativas do jogo.
+O host inicializa o suporte C#, descobre os mods e prepara suas fontes. O Roslyn compila as classes usando o SDK, e o MonoVM carrega o código gerenciado. As pontes JNI/C++ e IL2CPP registram conteúdo e ligam eventos aos métodos do Terraria Android.
 
-Os módulos nativos fazem as operações de tempo crítico sem exigir que cada callback passe por JavaScript. Algumas funcionalidades visuais do host ainda compartilham infraestrutura com o Bunny original; cada loader deve ser avaliado individualmente.
+O host continua com suas rotinas nativas e JavaScript para as demais funcionalidades do Bunny, mas não é necessário escrever callbacks C# como scripts JS.
 
-## Compilação do Android
+As operações que alteram objetos do Terraria precisam respeitar o contexto de execução, os hooks e as regras de ciclo de vida definidos pela integração nativa. Os contratos de cada loader dependem da versão do jogo.
 
-Abra a raiz do projeto no Android Studio. O build utiliza [`build.gradle.kts`](../build.gradle.kts), [`settings.gradle.kts`](../settings.gradle.kts), [`app/build.gradle.kts`](../app/build.gradle.kts) e [`app/src/main/cpp/CMakeLists.txt`](../app/src/main/cpp/CMakeLists.txt).
+## Arquivos essenciais para compilar
 
-A configuração importada define `compileSdk 34`, `minSdk 24`, `targetSdk 34`, NDK `30.0.16248370` e suporte nativo ARM64. Instale as versões requeridas pelo próprio projeto antes de tentar o build.
+A raiz conserva o Gradle e o projeto Android. Os fontes necessários incluem `app/src/main/cpp/`, `app/src/main/kotlin/`, `app/src/main/java/`, o CMake, o SDK gerenciado e os arquivos de suporte do Mono. O QuickJS do Bunny original também permanece porque faz parte do host.
 
-As DLLs do Roslyn e do Mono e as bibliotecas ARM64 usadas nessa revisão já estão em seus caminhos de empacotamento. **Não é necessário copiar essas dependências de outro repositório.**
+As dependências C# gerenciadas já estão em `app/src/main/assets/managed/`, e as bibliotecas Mono ARM64 em `app/src/main/jniLibs/arm64-v8a/`. Não é necessário combinar esses arquivos com binários de outra branch.
 
-O host ainda depende de partes proprietárias do Terraria não distribuídas aqui. Sem as bibliotecas e os assets do jogo legalmente fornecidos pelo responsável pela build, não é possível executar o Terraria integrado. Consulte [`app/src/main/jniLibs/arm64-v8a/README.md`](../app/src/main/jniLibs/arm64-v8a/README.md).
+Os dois exemplos originais de JavaScript mantidos em `samples/` são referenciados pelo build do Bunny. O `StarterModCSharp` serve apenas como exemplo de autoria; não é uma dependência do runtime.
 
-## Desenvolvimento de mods C#
+## Escopo desta entrega
 
-Consulte [`samples/ExampleModCSharp/`](../samples/ExampleModCSharp/) e os contratos em [`docs/csharp/`](csharp/). Os exemplos usam a API Bunny, com os fontes do ExampleModBunny como referência de comportamento.
+A base integrada anterior foi selecionada para **não carregar os loaders experimentais da linha de QA atual**. Foram removidos os projetos e exemplos recentes que não são necessários ao funcionamento do núcleo. Os fontes do host Android foram mantidos porque alguns deles são dependências diretas dos arquivos C#.
 
-A infraestrutura MonoVM/Roslyn é distinta da implementação completa de todos os loaders. Um novo loader pode exigir contratos e hooks nativos adicionais, sem alterações no compilador.
+Esta seleção não altera a implementação interna de MonoVM, Roslyn, JNI, IL2CPP nem do compilador da revisão escolhida. A integridade dos arquivos foi conferida contra o commit de origem; uma build de verificação no GitHub não equivale a testar cada comportamento em um aparelho real.
 
-A revisão de origem é fixa e está registrada em [`SOURCE_VERSION.md`](../SOURCE_VERSION.md). Não misture DLLs, nativos e SDK de revisões diferentes sem atualizar o conjunto.
+Consulte [Dependências](DEPENDENCIAS.md) e [Origem da base](../SOURCE_VERSION.md).

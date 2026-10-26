@@ -37,6 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf app experiments samples tests tools gradle docs/csharp
+          rm -f docs/csharp-*.md docs/csharp-*.json
           rm -f build.gradle.kts settings.gradle.kts gradle.properties .gitattributes .gitignore keystore.properties.example
           rm -f LICENSE.md LICENSING.md THIRD_PARTY_NOTICES.md TRADEMARKS.md CONTRIBUTING.md SECURITY.md
           mkdir -p app experiments/csharp samples tests tools docs gradle

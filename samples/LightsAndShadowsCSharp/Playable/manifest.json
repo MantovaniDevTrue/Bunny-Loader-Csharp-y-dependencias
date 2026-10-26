@@ -1,0 +1,25 @@
+{
+  "uid": "773249cb-219c-4f14-a49b-6991d575c777",
+  "id": "lightsandshadowscsharp",
+  "name": "Lights And Shadows — CSharp Native",
+  "version": "0.4.2.3",
+  "authors": [
+    {
+      "name": "yiyang233 / AWEoghAwo",
+      "role": "Original mod and visual assets"
+    },
+    {
+      "name": "Mantovani",
+      "role": "Bunny C# port"
+    }
+  ],
+  "category": "Visual",
+  "summary": "C# Lights And Shadows with managed 10 Hz screen-scene callback, four-pass Kawase, native camera interpolation and fallback. Requires experimental Bunny Loader C# .88.3+; nighttime shadow polish pending phone FPS test.",
+  "blVersion": 2,
+  "gameVersion": [
+    301720,
+    301720
+  ],
+  "entry": "main.cs",
+  "dependencies": []
+}

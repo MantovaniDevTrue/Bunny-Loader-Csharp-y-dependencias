@@ -1,0 +1,78 @@
+# Bunny Engine — multiplayer de sistemas C# (lote 3)
+
+Referência original: `ExampleModBunny/ExampleMod/content/Common/Systems/DownedBossSystem.js`.
+
+O ExampleModBunny usa `NetSend(writer)` com `writer.WriteFlags(DownedBossSystem.downedExampleBoss)` e `NetReceive(reader)` com `reader.ReadFlags()`. A implementação em C# usa o mesmo comportamento e uma API própria, sem dependência de JavaScript ou tModLoader.
+
+## Exemplo
+
+```csharp
+public override void NetSend(BunnyNetWriter writer)
+{
+    writer.WriteFlags(DownedExampleBoss);
+}
+
+public override void NetReceive(BunnyNetReader reader)
+{
+    bool[] flags = reader.ReadFlags();
+    if (flags.Length != 1)
+        throw new FormatException("Unexpected boss flags");
+    DownedExampleBoss = flags[0];
+}
+```
+
+O autor pode usar `WriteFlags` (até 16 bools por chamada), `WriteByte`, `WriteInt32` e `WriteString`, com seus métodos de leitura correspondentes. O payload total é limitado a 96 bytes por sistema por revisão. A API recusa tamanhos incorretos, buffers truncados e pacotes com bytes não lidos.
+
+## Fluxo de execução
+
+1. O host executa `NetSend` nos sistemas C# participantes durante o tick gerenciado existente, cerca de uma vez a cada 30 frames.
+2. Apenas quando o payload muda, sua revisão aumenta. O host publica um pacote `WS1`, isolado da rede de invasões `INV1`.
+3. A camada de rede nativa usa as sessões e o mecanismo de nonce/join já implementado para as invasões. Mensagens aos clientes usam `BLWS2`. O host mantém a última revisão enviada e o momento do envio para cada peer (isso ainda não é um ACK do cliente), alternando a prioridade entre mensagens de invasão e de mundo e priorizando revisões de mundo ainda não entregues antes de retransmissões periódicas. Os destinatários também são percorridos em rodízio entre os envios, incluindo clientes que entram depois ou mudam de posição na lista. São enviados no máximo dois pacotes no total por ciclo do bombeamento nativo.
+4. A fila de entrada do cliente mantém a revisão mais recente por sistema/mod/sessão, descartando duplicatas e atualizações anteriores mesmo quando alcança sua capacidade. Em seguida, o cliente verifica o nonce associado à sessão, a identidade do mod, o nome do sistema, o formato, a revisão crescente e a sessão do host estável antes de chamar `NetReceive` em C#.
+5. O cliente **não** escreve estado autoritativo no arquivo local e não pode publicar estados no canal host.
+
+## Limitações
+
+- A camada de rede é específica para os sistemas de mundo; não constitui um `ModPacket` universal.
+- A payload é pequena de propósito, por causa do transporte autenticado de mensagens do jogo. Redes grandes exigirão um protocolo separado com fragmentação e confirmação.
+- A revisão monotônica é por sessão, não um identificador de objetos do Terraria.
+- Ainda não há confirmação de recebimento pelo cliente. A camada marca o envio como aceito pelo transporte quando a chamada nativa retorna sucesso; como proteção contra perda posterior, o servidor tenta reenviar snapshots de mundo sem alterações após pelo menos 600 ticks (aproximadamente 10 segundos a 60 FPS), além de reenviar aos novos peers identificados pelo handshake. O cliente descarta revisões duplicadas. A entrega efetiva e um futuro protocolo de ACK ainda precisam de QA Android.
+- O estado sincronizado atualmente chega até um tick gerenciado depois do recebimento do pacote.
+- O payload é comparado em bytes, evitando codificações hexadecimais e alocações extras nos ticks sem mudanças. A verificação de tamanho antes do envio também não produz strings hexadecimais temporárias.
+- O empacotamento C#, a compilação e os testes de protocolo podem passar sem validar comunicação real entre dois aparelhos. A validação Android multiplayer permanece obrigatória.
+- O smoke test compila a classe real `ExampleWorldProgressSystem.cs` e verifica a recuperação da progressão após salvar/carregar e transmitir/receber flags. Isso valida o contrato gerenciado, mas não substitui um teste de entrega pela rede do Terraria.
+- MonoVM/Roslyn continuam sendo o runtime C#; não foi criada uma nova VM.
+
+## Testes
+
+```sh
+c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iapp/src/main/cpp experiments/csharp/BunnyWorldSystemsSmoke/WorldNetProtocolSmoke.cpp -o /tmp/bunny-world-net
+/tmp/bunny-world-net
+dotnet run --project experiments/csharp/BunnyWorldSystemsSmoke/BunnyWorldSystemsSmoke.csproj -c Release
+```
+
+## Roteiro Android: validação real de host e cliente
+
+No ExampleMod C# atualizado, o comando de QA `/worldnetqa` retorna
+`boss=<True|False> frames=<n> mode=<n>`. Não depende de JavaScript e usa a
+mesma assembly compartilhada que os sistemas de mundo.
+
+1. No host, entre no mundo com `ExampleMod CSharp` habilitado. No cliente,
+   entre no mesmo mundo com o mesmo mod habilitado. Execute `/worldnetqa`
+   em ambos: antes da progressão o esperado é `boss=False`.
+2. No host, execute `/worldnetqa mark` e depois `/worldnetqa`.
+   O host deve mostrar `boss=True`; o cliente deve receber `boss=True`
+   depois do próximo ciclo de sincronização. Se o cliente permanecer em
+   `boss=False`, o transporte host→cliente ainda não foi validado.
+3. No cliente, execute `/worldnetqa mark`. A tentativa deve ser rejeitada;
+   o cliente não pode estabelecer progresso autoritativo no host.
+4. Desconecte e reconecte o cliente depois da alteração, incluindo entrada
+   tardia de outro cliente. Verifique que o host transmite a revisão atual,
+   sem duplicar ou reverter progresso.
+5. Saia e reabra o mundo do host. Verifique que a progressão persiste no
+   host e volta a ser transmitida aos clientes. Teste outro mundo para
+   descartar vazamento de estado entre sessões.
+
+Este comando altera um sinalizador de **exemplo**, não derrota um boss real.
+Use um mundo de QA separado. Sucesso dos testes gerenciados e CI não comprova
+rede multiplayer em aparelhos Android.

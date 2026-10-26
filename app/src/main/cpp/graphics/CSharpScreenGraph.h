@@ -1,0 +1,49 @@
+#pragma once
+#include "graphics/EffectTypes.h"
+#include "graphics/ScreenScene.h"
+
+#include <map>
+#include <string>
+#include <vector>
+
+namespace bl::graphics {
+
+struct ScreenGraphUniform {
+    std::string name;
+    std::string value;
+    float constant = 0.f;
+};
+
+struct ScreenGraphTexture {
+    std::string name;
+    int day = 0;
+    int night = 0;
+};
+
+struct ScreenGraphPass {
+    int shader = 0;
+    int source = kTexScreen;
+    int dest = 0;
+    std::vector<ScreenGraphUniform> uniforms;
+    std::vector<ScreenGraphTexture> textures;
+};
+
+struct ScreenGraph {
+    std::string sceneNamespace;
+    std::string sceneClass;
+    std::string sceneMethod;
+    std::vector<TargetSpec> targets;
+    std::vector<ScreenGraphPass> passes;
+    EffectLayer layer = EffectLayer::World;
+    float intensity = 1.f;
+};
+
+bool loadCSharpScreenGraph(const std::string& modId, const std::string& className,
+                           const std::string& contentDirectory, const std::string& relativePath,
+                           EffectLayer layer, float intensity, ScreenGraph* graph,
+                           std::string* error,
+                           const std::map<std::string, float>& parameters = {});
+void buildCSharpScreenGraph(const ScreenGraph& graph, const ScreenSceneSnapshot& scene,
+                           EffectFrame* frame);
+
+}

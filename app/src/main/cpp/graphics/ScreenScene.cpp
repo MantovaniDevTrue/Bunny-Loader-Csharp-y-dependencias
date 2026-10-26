@@ -1,0 +1,270 @@
+#include "graphics/ScreenScene.h"
+#include "graphics/ScreenSceneTransition.h"
+#include "graphics/ScreenSceneFieldContract.h"
+#include "graphics/EffectRenderer.h"
+#include "core/Log.h"
+#include "il2cpp/Api.h"
+#include "il2cpp/Resolver.h"
+#include "il2cpp/Signature.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <string>
+
+namespace bl::graphics {
+namespace {
+
+struct Vec2 { float x, y; };
+
+enum class NumericType { Unknown, Single, Double };
+
+NumericType numericType(FieldInfo* field, const char* member) {
+    if (!field) return NumericType::Unknown;
+    auto& api = il2cpp::api();
+    const Il2CppType* type = api.field_get_type(field);
+    char* name = type ? api.type_get_name(type) : nullptr;
+    const NumericType result = name && std::strcmp(name, "System.Single") == 0
+        ? NumericType::Single : name && std::strcmp(name, "System.Double") == 0
+        ? NumericType::Double : NumericType::Unknown;
+    if (name) api.il2cpp_free(name);
+    if (result == NumericType::Single &&
+        bindScreenSceneField(field, "System.Single", sizeof(float), member)) return result;
+    if (result == NumericType::Double &&
+        bindScreenSceneField(field, "System.Double", sizeof(double), member)) return result;
+    return NumericType::Unknown;
+}
+
+struct Fields {
+    NumericType clockType = NumericType::Unknown;
+    NumericType surfaceType = NumericType::Unknown;
+    bool initialized = false;
+    bool resolved = false;
+    FieldInfo* daytime = nullptr;
+    FieldInfo* time = nullptr;
+    FieldInfo* screenWidth = nullptr;
+    FieldInfo* screenHeight = nullptr;
+    FieldInfo* screenPosition = nullptr;
+    FieldInfo* worldSurface = nullptr;
+    FieldInfo* moonPhase = nullptr;
+    const MethodInfo* screenPositionGetter = nullptr;
+    const MethodInfo* mainScreenWidthGetter = nullptr;
+    const MethodInfo* mainScreenHeightGetter = nullptr;
+    const MethodInfo* unityScreenWidthGetter = nullptr;
+    const MethodInfo* unityScreenHeightGetter = nullptr;
+};
+
+Fields g_fields;
+ScreenSceneTransition g_transition;
+std::chrono::steady_clock::time_point g_lastSample;
+
+template <typename T>
+bool read(FieldInfo* field, T& out) {
+    if (!field) return false;
+    il2cpp::api().field_static_get_value(field, &out);
+    return true;
+}
+
+bool readDouble(FieldInfo* field, NumericType type, double& out) {
+    if (!field) return false;
+    auto& api = il2cpp::api();
+    if (type == NumericType::Single) {
+        float value = 0.f;
+        api.field_static_get_value(field, &value);
+        out = value;
+        return std::isfinite(value);
+    }
+    if (type != NumericType::Double) return false;
+    api.field_static_get_value(field, &out);
+    return std::isfinite(out);
+}
+
+}
+
+ScreenSceneSnapshot sampleScreenScene() {
+    if (!g_fields.initialized) {
+        Il2CppClass* main = il2cpp::findClass({"Terraria", "Main", {}});
+        if (main) {
+            g_fields.daytime = bindScreenSceneField(il2cpp::findField(main, "dayTime"),
+                "System.Boolean", sizeof(bool), "Main.dayTime");
+            g_fields.time = il2cpp::findField(main, "time");
+            g_fields.screenWidth = bindScreenSceneField(il2cpp::findField(main, "screenWidth"),
+                "System.Int32", sizeof(int), "Main.screenWidth");
+            g_fields.screenHeight = bindScreenSceneField(il2cpp::findField(main, "screenHeight"),
+                "System.Int32", sizeof(int), "Main.screenHeight");
+            g_fields.screenPosition = bindScreenSceneVectorField(
+                il2cpp::findField(main, "screenPosition"), "Main.screenPosition");
+            if (!g_fields.screenPosition ||
+                !(il2cpp::api().field_get_flags(g_fields.screenPosition) & 0x10u)) {
+                g_fields.screenPosition = nullptr;
+                const auto* getter = il2cpp::findMethodBySignature(
+                    main, il2cpp::parseSignature("Vector2 get_screenPosition()"));
+                if (getter && !il2cpp::api().method_is_instance(getter) &&
+                    screenSceneVectorContract(il2cpp::api().method_get_return_type(getter), "Main.get_screenPosition") &&
+                    il2cpp::methodPointer(getter))
+                    g_fields.screenPositionGetter = getter;
+            }
+            g_fields.worldSurface = il2cpp::findField(main, "worldSurface");
+            g_fields.moonPhase = bindScreenSceneField(il2cpp::findField(main, "moonPhase"),
+                "System.Int32", sizeof(int), "Main.moonPhase");
+            const auto* mainWidthGetter = il2cpp::findMethodBySignature(
+                main, il2cpp::parseSignature("Int32 get_screenWidth()"));
+            const auto* mainHeightGetter = il2cpp::findMethodBySignature(
+                main, il2cpp::parseSignature("Int32 get_screenHeight()"));
+            if (mainWidthGetter && !il2cpp::api().method_is_instance(mainWidthGetter) &&
+                il2cpp::methodPointer(mainWidthGetter))
+                g_fields.mainScreenWidthGetter = mainWidthGetter;
+            if (mainHeightGetter && !il2cpp::api().method_is_instance(mainHeightGetter) &&
+                il2cpp::methodPointer(mainHeightGetter))
+                g_fields.mainScreenHeightGetter = mainHeightGetter;
+            Il2CppClass* unityScreen = il2cpp::findClass({"UnityEngine", "Screen", {}});
+            if (unityScreen) {
+                const auto* widthGetter = il2cpp::findMethodBySignature(
+                    unityScreen, il2cpp::parseSignature("Int32 get_width()"));
+                const auto* heightGetter = il2cpp::findMethodBySignature(
+                    unityScreen, il2cpp::parseSignature("Int32 get_height()"));
+                if (widthGetter && !il2cpp::api().method_is_instance(widthGetter) &&
+                    il2cpp::methodPointer(widthGetter))
+                    g_fields.unityScreenWidthGetter = widthGetter;
+                if (heightGetter && !il2cpp::api().method_is_instance(heightGetter) &&
+                    il2cpp::methodPointer(heightGetter))
+                    g_fields.unityScreenHeightGetter = heightGetter;
+            }
+            g_fields.clockType = numericType(g_fields.time, "Main.time");
+            g_fields.surfaceType = numericType(g_fields.worldSurface, "Main.worldSurface");
+            g_fields.initialized = true;
+            g_fields.resolved = true;
+        }
+    }
+
+    ScreenSceneSnapshot s;
+    bool day = true;
+    double gameTime = 0.0;
+    double surface = 0.0;
+    int width = 0, height = 0, moonPhase = 0;
+    Vec2 pos{};
+    const bool dayReady = read(g_fields.daytime, day);
+    const bool timeReady = readDouble(g_fields.time, g_fields.clockType, gameTime) && gameTime >= 0.0;
+    bool widthReady = g_fields.screenWidth &&
+        (il2cpp::api().field_get_flags(g_fields.screenWidth) & 0x10u) &&
+        read(g_fields.screenWidth, width) && width > 0 && width < 32768;
+    bool heightReady = g_fields.screenHeight &&
+        (il2cpp::api().field_get_flags(g_fields.screenHeight) & 0x10u) &&
+        read(g_fields.screenHeight, height) && height > 0 && height < 32768;
+    int renderedWidth = 0, renderedHeight = 0;
+    EffectRenderer::LastViewportSize(&renderedWidth, &renderedHeight);
+    if (renderedWidth > 0 && renderedHeight > 0 &&
+        renderedWidth < 32768 && renderedHeight < 32768) {
+        width = renderedWidth;
+        height = renderedHeight;
+        widthReady = heightReady = true;
+    }
+    if ((!widthReady || !heightReady) &&
+        g_fields.mainScreenWidthGetter && g_fields.mainScreenHeightGetter) {
+        using ScreenDimensionFn = int (*)(const MethodInfo*);
+        const int mainWidth = reinterpret_cast<ScreenDimensionFn>(
+            il2cpp::methodPointer(g_fields.mainScreenWidthGetter))(
+            g_fields.mainScreenWidthGetter);
+        const int mainHeight = reinterpret_cast<ScreenDimensionFn>(
+            il2cpp::methodPointer(g_fields.mainScreenHeightGetter))(
+            g_fields.mainScreenHeightGetter);
+        if (mainWidth > 0 && mainHeight > 0 &&
+            mainWidth < 32768 && mainHeight < 32768) {
+            width = mainWidth;
+            height = mainHeight;
+            widthReady = heightReady = true;
+        }
+    }
+    if ((!widthReady || !heightReady) &&
+        g_fields.unityScreenWidthGetter && g_fields.unityScreenHeightGetter) {
+        using ScreenDimensionFn = int (*)(const MethodInfo*);
+        const int displayWidth = reinterpret_cast<ScreenDimensionFn>(
+            il2cpp::methodPointer(g_fields.unityScreenWidthGetter))(
+            g_fields.unityScreenWidthGetter);
+        const int displayHeight = reinterpret_cast<ScreenDimensionFn>(
+            il2cpp::methodPointer(g_fields.unityScreenHeightGetter))(
+            g_fields.unityScreenHeightGetter);
+        if (displayWidth > 0 && displayHeight > 0 &&
+            displayWidth < 32768 && displayHeight < 32768) {
+            width = displayWidth;
+            height = displayHeight;
+            widthReady = heightReady = true;
+        }
+    }
+    bool posReady = read(g_fields.screenPosition, pos);
+    if (!posReady && g_fields.screenPositionGetter) {
+        using Fn = Vec2 (*)(const MethodInfo*);
+        pos = reinterpret_cast<Fn>(
+            il2cpp::methodPointer(g_fields.screenPositionGetter))(
+                g_fields.screenPositionGetter);
+        posReady = true;
+    }
+    posReady = posReady && std::isfinite(pos.x) && std::isfinite(pos.y);
+    const bool surfaceReady = readDouble(g_fields.worldSurface, g_fields.surfaceType, surface) &&
+                              surface > 0.0 && surface < 100000.0;
+    if (!dayReady || !timeReady || !widthReady || !heightReady ||
+        !posReady || !surfaceReady) {
+        static bool notified = false;
+        if (!notified) {
+            notified = true;
+            BL_WARN("CSharp ScreenFx: dados parciais do Terraria (Main=%d day=%d time=%d size=%d/%d pos=%d surface=%d); grafo continua com valores seguros",
+                    g_fields.resolved, dayReady, timeReady, widthReady, heightReady,
+                    posReady, surfaceReady);
+        }
+    }
+    if (!timeReady) gameTime = 13500.0;
+    if (!widthReady) width = 1920;
+    if (!heightReady) height = 1080;
+    if (!posReady) pos = Vec2{};
+    if (!surfaceReady) surface = 250.0;
+    read(g_fields.moonPhase, moonPhase);
+    const float w = static_cast<float>(width);
+    const float h = static_cast<float>(height);
+    const float duration = day ? 27000.f : 16200.f;
+    const float progress = std::clamp(static_cast<float>(gameTime) / duration, 0.f, 2.f);
+    const float p = 1.f - progress;
+    const float worldSurfacePixels = static_cast<float>(surface) * 16.f;
+    const float denominator = worldSurfacePixels - 600.f;
+    const float correction = std::fabs(denominator) > 0.01f ? -pos.y / denominator * 200.f : 0.f;
+    const float sunX = (progress * w * 0.5f - 100.f * p) / w;
+    const float sunY = 1.f - (correction + p * p * 250.f + 180.f) / h;
+    const float depth = (pos.y + h * 0.5f) / 16.f - (static_cast<float>(surface) - 150.f);
+    const float attenuation = std::max(0.f, day ? 1.f - std::max(depth, 0.f) / 600.f :
+                                                1.f - std::max(depth, 0.f) / 200.f);
+    const float moon = moonPhase == 0 ? 1.01f :
+                       (moonPhase == 3 || moonPhase == 5) ? .9f :
+                       moonPhase == 4 ? .6f : 1.f;
+
+    s.raw.dayTime = day;
+    s.raw.gameTime = gameTime;
+    s.raw.worldSurface = surface;
+    s.raw.cameraX = pos.x;
+    s.raw.cameraY = pos.y;
+    s.raw.screenWidth = width;
+    s.raw.screenHeight = height;
+    s.raw.playerCenterY = pos.y + h * 0.5f;
+    s.raw.moonPhase = moonPhase;
+    s.valid = true;
+    s.daytime = day;
+    s.sunVisibility = std::clamp((worldSurfacePixels + 800.f - (pos.y + h * 0.5f)) / 256.f, 0.f, 1.f);
+    s.sunEnabled = s.sunVisibility > 0.f;
+    s.dayBlend = day ? 1.f : 0.f;
+    s.sunX = std::clamp(sunX, -1.f, 2.f);
+    s.sunY = std::clamp(sunY, -1.f, 2.f);
+    s.clock = std::clamp(static_cast<float>(gameTime) / (day ? 54000.f : 32400.f), 0.f, 1.f);
+    s.strength = 0.8f * (day ? 1.f : moon) * attenuation;
+    s.shadowThreshold = day ? 0.98f : 0.02f;
+    const auto now = std::chrono::steady_clock::now();
+    const float elapsed = g_lastSample.time_since_epoch().count() == 0
+        ? 0.f : std::chrono::duration<float>(now - g_lastSample).count();
+    g_lastSample = now;
+    return g_transition.advance(s, elapsed);
+}
+
+void resetScreenScene() {
+    g_transition.reset();
+    g_lastSample = std::chrono::steady_clock::time_point{};
+}
+
+}

@@ -1,0 +1,1320 @@
+package bunny;
+
+import android.animation.ValueAnimator;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.Rect;
+import android.graphics.Typeface;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
+import android.os.SystemClock;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
+import android.text.TextWatcher;
+import android.text.style.ForegroundColorSpan;
+import android.view.Gravity;
+import android.util.DisplayMetrics;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewConfiguration;
+import android.view.ViewTreeObserver;
+import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.PopupWindow;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import java.util.ArrayList;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static bunny.CheatBridge.GRASS;
+import static bunny.CheatBridge.GRASS_LIT;
+import static bunny.CheatBridge.INK;
+import static bunny.CheatBridge.INK_DIM;
+import static bunny.CheatBridge.OUTLINE;
+import static bunny.CheatBridge.PANEL;
+import static bunny.CheatBridge.PANEL_DARK;
+import static bunny.CheatBridge.BUTTON;
+import static bunny.CheatBridge.PANEL_LIT;
+import static bunny.CheatBridge.SCRIM;
+import static bunny.CheatBridge.applyTextSize;
+import static bunny.CheatBridge.icon;
+import static bunny.CheatBridge.panel;
+import static bunny.CheatBridge.panelBig;
+import static bunny.CheatBridge.px;
+import static bunny.CheatBridge.sprite;
+import static bunny.CheatBridge.text;
+import static bunny.CheatBridge.tr;
+
+/**
+ * As ferramentas de quem faz mod, dentro do jogo: reiniciar (os mods sao lidos
+ * de novo da pasta) e o Editor de JS.
+ *
+ * O Editor e um painel no pe da tela, e nao uma janela por cima: o jogo segue
+ * visivel e tocavel acima dele. Em tela cheia ele cobre o jogo e o congela
+ * (o jogo so volta a andar quando o Editor minimiza ou fecha). O icone
+ * flutuante de JS fica disponivel desde a tela de titulo e reabre o Editor
+ * como estava (janela ou tela cheia). Com o teclado
+ * aberto, o painel sobe junto e
+ * fica logo acima dele — sem a tela cheia de edicao que o Android poe no lugar
+ * do jogo quando o aparelho esta deitado (IME_FLAG_NO_EXTRACT_UI), e sem
+ * empurrar a tela do jogo para cima (SOFT_INPUT_ADJUST_NOTHING enquanto ele
+ * esta aberto).
+ */
+final class DevTools {
+
+    private DevTools() { }
+
+    // ============================== botoes do Mod Menu ==============================
+
+    /** O quadro 9 da tira do girassol: a flor aberta, o icone do "Reiniciar" parado. */
+    private static final int BLOOM_FRAME = 9, FRAME_W = 52, FRAME_H = 54;
+    private static Bitmap sBloom;
+
+    static Bitmap bloom(Activity a) {
+        if (sBloom == null) {
+            Bitmap strip = sprite(a, "spr_loading");
+            if (strip != null && strip.getHeight() >= (BLOOM_FRAME + 1) * FRAME_H) {
+                sBloom = Bitmap.createBitmap(strip, 0, BLOOM_FRAME * FRAME_H, FRAME_W, FRAME_H);
+            }
+        }
+        return sBloom;
+    }
+
+    /**
+     * Uma linha com "Reiniciar" e "Editor", embaixo das horas do dia. Cada um
+     * pode ser desligado em Config > Desenvolvedor; sobrando um, ele ocupa a
+     * linha, e sem nenhum a linha nem aparece.
+     */
+    static View menuButtons(final Activity act) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        if (!CheatBridge.sRestartOn && !CheatBridge.sEditorOn) {
+            row.setVisibility(View.GONE);
+            return row;
+        }
+        View restart = pill(act, icon(act, bloom(act), 18), tr("Reiniciar"), BUTTON, 9f);
+        restart.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmRestart(act); }
+        });
+        View console = pill(act, consoleBadge(act, 10), tr("Editor"), BUTTON, 9f);
+        console.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                openConsole(act);
+            }
+        });
+        boolean both = CheatBridge.sRestartOn && CheatBridge.sEditorOn;
+        if (CheatBridge.sRestartOn) {
+            LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(0, px(act, 30), 1f);
+            if (both) l.rightMargin = px(act, 2);
+            row.addView(restart, l);
+        }
+        if (CheatBridge.sEditorOn) {
+            LinearLayout.LayoutParams r = new LinearLayout.LayoutParams(0, px(act, 30), 1f);
+            if (both) r.leftMargin = px(act, 2);
+            row.addView(console, r);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = px(act, 4);
+        lp.bottomMargin = px(act, 2);
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    /** "</>" na fonte do jogo, o simbolo do console. */
+    private static TextView consoleBadge(Activity act, float size) {
+        TextView t = text(act, "</>", size, GRASS_LIT);
+        t.setGravity(Gravity.CENTER);
+        return t;
+    }
+
+    /** Botao com a cara dos do menu: icone e rotulo num painel. */
+    private static LinearLayout pill(Activity act, View iconView, String label, int fill) {
+        return pill(act, iconView, label, fill, 11f);
+    }
+
+    private static LinearLayout pill(Activity act, View iconView, String label, int fill, float size) {
+        LinearLayout b = new LinearLayout(act);
+        b.setOrientation(LinearLayout.HORIZONTAL);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(fill == BUTTON ? CheatBridge.actionBackground(act, false) : panel(act, fill, OUTLINE));
+        int side = size < 11f ? 3 : 7;
+        b.setPadding(px(act, side), 0, px(act, side), 0);
+        if (iconView != null) b.addView(iconView);
+        if (label != null) {
+            TextView t = text(act, label, size, INK);
+            t.setSingleLine(true);
+            t.setPadding(iconView != null ? px(act, 4) : 0, 0, 0, 0);
+            b.addView(t);
+        }
+        b.setClickable(true);
+        return b;
+    }
+
+    // ================================== reiniciar ==================================
+    //
+    // O jogo le os mods UMA vez, ao subir. Reiniciar e fechar o processo do jogo
+    // e abrir de novo — a RestartActivity do launcher (outro processo) espera
+    // este morrer e abre a GameActivity, que carrega os mods da pasta outra vez.
+    // Salvar antes e pedido ao nativo: o save do jogo so roda na thread dele.
+
+    private static final long RESTART_POLL_MS = 100;
+    private static final long RESTART_TIMEOUT_MS = 30000;
+    private static View sRestartDialog;
+
+    static void confirmRestart(final Activity act) {
+        if (sRestartDialog != null) return;
+        final boolean inWorld = CheatBridge.nInWorld();
+
+        final FrameLayout scrim = new FrameLayout(act);
+        scrim.setBackgroundColor(SCRIM);
+        scrim.setClickable(true);   // o toque no escuro nao vai ao jogo
+
+        final LinearLayout card = new LinearLayout(act);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(panelBig(act, PANEL, OUTLINE));
+        card.setPadding(px(act, 16), px(act, 14), px(act, 16), px(act, 14));
+        card.setClickable(true);
+
+        LinearLayout head = new LinearLayout(act);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(icon(act, bloom(act), 30));
+        TextView title = text(act, tr("Reiniciar o jogo"), 16, INK);
+        title.setPadding(px(act, 8), 0, 0, 0);
+        head.addView(title);
+        card.addView(head);
+
+        TextView msg = text(act, inWorld
+            ? tr("O jogo fecha e abre de novo, lendo os mods da pasta outra vez. O que não foi salvo neste mundo se perde se você não salvar agora.")
+            : tr("O jogo fecha e abre de novo, lendo os mods da pasta outra vez."), 11, INK_DIM);
+        msg.setPadding(0, px(act, 10), 0, px(act, 12));
+        card.addView(msg);
+
+        LinearLayout buttons = new LinearLayout(act);
+        buttons.setGravity(Gravity.END);
+        if (inWorld) {
+            View save = pill(act, null, tr("Salvar e reiniciar"), GRASS);
+            save.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { startRestart(act, card, true); }
+            });
+            buttons.addView(save, buttonParams(act));
+        }
+        View plain = pill(act, null, inWorld ? tr("Só reiniciar") : tr("Reiniciar"), PANEL_LIT);
+        plain.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { startRestart(act, card, false); }
+        });
+        buttons.addView(plain, buttonParams(act));
+        View cancel = pill(act, null, tr("Cancelar"), BUTTON);
+        cancel.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { closeRestartDialog(); }
+        });
+        buttons.addView(cancel, buttonParams(act));
+        card.addView(buttons);
+
+        int width = Math.min(px(act, 460), act.getResources().getDisplayMetrics().widthPixels - px(act, 40));
+        FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT);
+        cl.gravity = Gravity.CENTER;
+        scrim.addView(card, cl);
+        act.addContentView(scrim, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        sRestartDialog = scrim;
+    }
+
+    private static LinearLayout.LayoutParams buttonParams(Activity act) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, px(act, 30));
+        lp.leftMargin = px(act, 6);
+        return lp;
+    }
+
+    private static void closeRestartDialog() {
+        if (sRestartDialog == null) return;
+        ViewGroup parent = (ViewGroup) sRestartDialog.getParent();
+        if (parent != null) parent.removeView(sRestartDialog);
+        sRestartDialog = null;
+    }
+
+    /** Troca o cartao pelo girassol girando e espera o nativo dizer que pode fechar. */
+    private static void startRestart(final Activity act, LinearLayout card, boolean save) {
+        card.removeAllViews();
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.addView(new CheatBridge.Sunflower(act));
+        final TextView status = text(act, save ? tr("Salvando o jogador e o mundo...") : tr("Reiniciando..."), 12, INK);
+        status.setGravity(Gravity.CENTER);
+        status.setPadding(0, px(act, 8), 0, 0);
+        card.addView(status);
+        saveConsoleState(act);
+
+        CheatBridge.nRequestRestart(save);
+        final long start = SystemClock.uptimeMillis();
+        final Handler h = new Handler(Looper.getMainLooper());
+        h.post(new Runnable() {
+            @Override public void run() {
+                boolean ready;
+                try { ready = CheatBridge.nRestartReady(); } catch (Throwable t) { ready = true; }
+                if (ready) { status.setText(tr("Reiniciando...")); h.postDelayed(new Runnable() {
+                    @Override public void run() { relaunch(act); }
+                }, 60); return; }
+                if (SystemClock.uptimeMillis() - start > RESTART_TIMEOUT_MS) {
+                    // O quadro do jogo nao andou (travou, ou esta pausado no
+                    // fundo): reinicia sem o save, que e o que ainda da.
+                    status.setText(tr("O jogo não respondeu. Reiniciando sem salvar..."));
+                    h.postDelayed(new Runnable() {
+                        @Override public void run() { relaunch(act); }
+                    }, 1200);
+                    return;
+                }
+                h.postDelayed(this, RESTART_POLL_MS);
+            }
+        });
+    }
+
+    /**
+     * Abre a RestartActivity no processo do launcher e fecha este. O
+     * startActivity volta depois que o sistema registrou o pedido, entao
+     * matar o processo logo em seguida nao o perde.
+     */
+    static void relaunch(Activity act) {
+        try {
+            Intent i = new Intent();
+            i.setClassName(act.getPackageName(), "dev.bunnyloader.RestartActivity");
+            i.putExtra("pid", Process.myPid());
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            act.startActivity(i);
+            act.overridePendingTransition(0, 0);
+        } catch (Throwable t) {
+            CheatBridge.toast(act, tr("Não consegui reiniciar: %1$s", t));
+            closeRestartDialog();
+            return;
+        }
+        Process.killProcess(Process.myPid());
+        System.exit(0);
+    }
+
+    // =================================== console ===================================
+
+    private static final String PREFS = "bunny_console";
+    private static final int MAX_HISTORY = 60;
+    /** Linhas da saida guardadas; passando disso, a saida recomeca das ultimas. */
+    private static final int MAX_LINES = 700, KEEP_LINES = 450;
+    private static final long POLL_MS = 120;
+
+    // Cores da saida, por especie (Console.h no nativo).
+    private static final int C_INPUT = 0xFFE8ECFF, C_PROMPT = 0xFF8A95C8, C_RESULT = 0xFFFFFFFF,
+        C_ERROR = 0xFFFF7A7A, C_PRINT = 0xFFFFE08A, C_LOG = 0xFF9FB0E8, C_WARN = 0xFFFFB35C,
+        C_HINT = 0xFF8A95C8;
+
+    // A saida e o historico valem a partida inteira: fechar e abrir o console
+    // mostra o que ja estava la. O historico (e o rascunho) vao tambem para o
+    // disco, e sobrevivem ao "Reiniciar".
+    private static final SpannableStringBuilder sOutput = new SpannableStringBuilder();
+    private static final SpannableStringBuilder sCSharpOutput = new SpannableStringBuilder();
+    private static int sOutputLines;
+    private static int sCSharpOutputLines;
+
+    private static SpannableStringBuilder activeOutput() {
+        return sConsole != null && sConsole.csharpMode ? sCSharpOutput : sOutput;
+    }
+    private static ArrayList<String> sHistory;
+    private static ArrayList<String> sCSharpHistory;
+    private static Console sConsole;
+    private static View sFloatIcon;
+
+    static void openConsole(Activity act) {
+        if (!CheatBridge.sEditorOn) return;
+        if (CheatBridge.sOverlay != null) CheatBridge.sOverlay.setVisibility(View.GONE);
+        if (sConsole != null) {
+            sConsole.show();
+            return;
+        }
+        loadHistory(act);
+        sConsole = new Console(act);
+        sConsole.show();
+    }
+
+    private static void saveConsoleState(Activity act) {
+        if (sConsole != null) sConsole.saveDraft();
+        saveHistory(act);
+    }
+
+    private static SharedPreferences prefs(Context c) {
+        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static void loadHistory(Activity act) {
+        if (sHistory != null) return;
+        sHistory = new ArrayList<String>();
+        try {
+            String all = prefs(act).getString("history", "");
+            if (all.length() > 0) {
+                for (String s : all.split("\u0001", -1)) if (s.length() > 0) sHistory.add(s);
+            }
+        } catch (Throwable t) { /* sem historico */ }
+        sCSharpHistory = new ArrayList<String>();
+        try {
+            String all = prefs(act).getString("historyCSharp", "");
+            if (!all.isEmpty())
+                for (String value : all.split("\u0001", -1))
+                    if (!value.isEmpty()) sCSharpHistory.add(value);
+        } catch (Throwable ignored) { }
+    }
+
+    private static void saveHistory(Activity act) {
+        if (sHistory == null) return;
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < sHistory.size(); i++) {
+            if (i > 0) b.append('\u0001');
+            b.append(sHistory.get(i));
+        }
+        StringBuilder cs = new StringBuilder();
+        if (sCSharpHistory != null)
+            for (String value : sCSharpHistory) {
+                if (cs.length() > 0) cs.append('\u0001');
+                cs.append(value);
+            }
+        try { prefs(act).edit().putString("history", b.toString())
+                    .putString("historyCSharp", cs.toString()).apply(); }
+        catch (Throwable ignored) { }
+    }
+
+    /** Uma entrada da saida: especie (o 1o caractere, como no nativo) e texto. */
+    private static void appendEntry(char kind, String body) {
+        int color;
+        String prefix = null;
+        int prefixColor = C_PROMPT;
+        switch (kind) {
+            case 'i': color = C_INPUT; prefix = "› "; break;
+            case 'r': color = C_RESULT; prefix = "← "; break;
+            case 'x': color = C_ERROR; prefix = "× "; prefixColor = C_ERROR; break;
+            case 'p': color = C_PRINT; prefix = "chat: "; prefixColor = 0xFFB9A060; break;
+            case 'w': color = C_WARN; break;
+            case 'e': color = C_ERROR; break;
+            case 'h': color = C_HINT; break;
+            default:  color = C_LOG; break;
+        }
+        SpannableStringBuilder target = activeOutput();
+        if (target.length() > 0) target.append('\n');
+        if (prefix != null) span(target, prefix, prefixColor);
+        span(target, body, color);
+        int rows = 1;
+        for (int i = 0; i < body.length(); i++) if (body.charAt(i) == '\n') rows++;
+        if (sConsole != null && sConsole.csharpMode) sCSharpOutputLines += rows;
+        else sOutputLines += rows;
+    }
+
+    private static void span(SpannableStringBuilder target, String s, int color) {
+        int start = target.length();
+        target.append(s);
+        target.setSpan(new ForegroundColorSpan(color), start, target.length(),
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+
+    /** Passou do teto: fica so o fim. */
+    private static boolean trimOutput() {
+        boolean csharp = sConsole != null && sConsole.csharpMode;
+        SpannableStringBuilder target = activeOutput();
+        int count = csharp ? sCSharpOutputLines : sOutputLines;
+        if (count <= MAX_LINES) return false;
+        int drop = count - KEEP_LINES, at = 0;
+        while (drop > 0 && at < target.length()) {
+            if (target.charAt(at) == '\n') drop--;
+            at++;
+        }
+        target.delete(0, at);
+        if (csharp) sCSharpOutputLines = KEEP_LINES;
+        else sOutputLines = KEEP_LINES;
+        return true;
+    }
+
+    /** O painel do console. Um por partida; fechar so o tira da tela. */
+    private static final class Console implements KeyboardListener {
+        final Activity act;
+        final LinearLayout panel;
+        final View body;
+        final TextView output;
+        final ScrollView outputScroll;
+        final TextView hookCounters;
+        final TextView editorHelp;
+        final EditText editor;
+        final TextView fullButton;
+        final TextView title;
+        final TextView languageButton;
+        boolean csharpMode;
+        long lastHookCountersPoll;
+        String lastHookCountersText = "";
+        String lastRuntimeStatusLine = "";
+        String jsDraft = "";
+        String csharpDraft = "";
+        final Handler handler = new Handler(Looper.getMainLooper());
+        KeyboardWatcher keyboard;
+        int keyboardHeight;
+        int savedSoftInput = -1;
+        boolean fullscreen;
+        boolean showing;
+        int historyIndex = -1;
+        String scratch = "";
+        ValueAnimator slide;
+        FrameLayout.LayoutParams layout;
+
+        private final Runnable poll = new Runnable() {
+            @Override public void run() {
+                pullOutput();
+                pullHookCounters();
+                if (showing) handler.postDelayed(this, POLL_MS);
+            }
+        };
+
+        Console(final Activity a) {
+            act = a;
+            panel = new LinearLayout(a);
+            panel.setOrientation(LinearLayout.VERTICAL);
+            panel.setBackground(panelBig(a, PANEL, OUTLINE));
+            panel.setPadding(px(a, 8), px(a, 6), px(a, 8), px(a, 8));
+            // Toque no painel e do painel: sem isto, o espaco entre as partes
+            // deixava o toque atravessar para o jogo.
+            panel.setClickable(true);
+
+            // ---- topo ----
+            LinearLayout head = new LinearLayout(a);
+            head.setOrientation(LinearLayout.HORIZONTAL);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            TextView badge = consoleBadge(a, 12);
+            badge.setBackground(panel(a, PANEL_DARK, OUTLINE));
+            badge.setPadding(px(a, 6), 0, px(a, 6), 0);
+            head.addView(badge, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, px(a, 26)));
+            title = text(a, tr("Editor JS"), 13, INK);
+            title.setSingleLine(true);
+            title.setPadding(px(a, 8), 0, px(a, 6), 0);
+            head.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            languageButton = textButton(a, "JS", BUTTON, new Runnable() {
+                @Override public void run() { switchEditorLanguage(); }
+            });
+            head.addView(languageButton);
+
+            head.addView(iconButton(a, arrow(a, -90), tr("Anterior"), new Runnable() {
+                @Override public void run() { history(-1); }
+            }));
+            head.addView(iconButton(a, arrow(a, 90), tr("Próximo"), new Runnable() {
+                @Override public void run() { history(+1); }
+            }));
+            head.addView(textButton(a, tr("Limpar"), BUTTON, new Runnable() {
+                @Override public void run() { clearOutput(); }
+            }));
+            if (CheatBridge.sRestartOn) {
+                head.addView(iconButton(a, icon(a, bloom(a), 20), tr("Reiniciar"), new Runnable() {
+                    @Override public void run() { saveDraft(); hideKeyboard(); confirmRestart(act); }
+                }));
+            }
+            fullButton = textButton(a, tr("Tela cheia"), BUTTON, new Runnable() {
+                @Override public void run() { setFullscreen(!fullscreen); }
+            });
+            head.addView(fullButton);
+            head.addView(textButton(a, "_", BUTTON, new Runnable() {
+                @Override public void run() { minimize(); }
+            }));
+            head.addView(iconButton(a, icon(a, sprite(a, "ic_fechar"), 20), tr("Fechar"), new Runnable() {
+                @Override public void run() { hide(); }
+            }));
+            panel.addView(head, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, px(a, 28)));
+
+            LinearLayout inner = new LinearLayout(a);
+            inner.setOrientation(LinearLayout.VERTICAL);
+            body = inner;
+
+            // Language-specific help stays separate from the shared log history.
+            editorHelp = new TextView(a);
+            applyTextSize(a, editorHelp, 8.5f);
+            editorHelp.setTextColor(INK_DIM);
+            editorHelp.setBackground(panel(a, PANEL_DARK, OUTLINE));
+            editorHelp.setMinLines(2);
+            editorHelp.setGravity(Gravity.CENTER_VERTICAL);
+            editorHelp.setPadding(px(a, 6), px(a, 4), px(a, 6), px(a, 4));
+            LinearLayout.LayoutParams helpLayout = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            helpLayout.topMargin = px(a, 5);
+            inner.addView(editorHelp, helpLayout);
+
+            // ---- saida ----
+            output = new TextView(a);
+            output.setTypeface(Typeface.MONOSPACE);
+            applyTextSize(a, output, 7.5f);
+            output.setTextColor(C_LOG);
+            output.setTextIsSelectable(true);
+            output.setPadding(px(a, 6), px(a, 4), px(a, 6), px(a, 4));
+            outputScroll = new ScrollView(a);
+            outputScroll.setBackground(panel(a, PANEL_DARK, OUTLINE));
+            outputScroll.setFillViewport(true);
+            outputScroll.addView(output);
+            LinearLayout.LayoutParams ol = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+            ol.topMargin = px(a, 5);
+            inner.addView(outputScroll, ol);
+
+            hookCounters = new TextView(a);
+            hookCounters.setTypeface(Typeface.MONOSPACE);
+            applyTextSize(a, hookCounters, 7.5f);
+            hookCounters.setTextColor(INK);
+            hookCounters.setText("Hooks C#: aguardando evento de dano...");
+            hookCounters.setBackground(panel(a, PANEL_DARK, OUTLINE));
+            hookCounters.setPadding(px(a, 6), px(a, 6), px(a, 6), px(a, 6));
+            hookCounters.setGravity(Gravity.CENTER_VERTICAL);
+            hookCounters.setMinHeight(px(a, 44));
+            hookCounters.setVisibility(View.GONE);
+            LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            hl.topMargin = px(a, 5);
+            panel.addView(hookCounters, hl);
+
+            // ---- editor + rodar ----
+            LinearLayout editRow = new LinearLayout(a);
+            editRow.setOrientation(LinearLayout.HORIZONTAL);
+            editor = new EditText(a);
+            editor.setTypeface(Typeface.MONOSPACE);
+            applyTextSize(a, editor, 8.5f);
+            editor.setTextColor(INK);
+            editor.setHintTextColor(C_HINT);
+            editor.setHint("player.statLife = 500");
+            editor.setBackground(panel(a, PANEL_DARK, OUTLINE));
+            editor.setPadding(px(a, 6), px(a, 4), px(a, 6), px(a, 4));
+            editor.setGravity(Gravity.TOP | Gravity.START);
+            // Codigo: sem corretor, sem sugestao, varias linhas. E sem a tela
+            // cheia de edicao do Android no aparelho deitado.
+            editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+            CheatBridge.noAutofill(editor);
+            editor.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN
+                | EditorInfo.IME_ACTION_NONE);
+            editor.setHorizontallyScrolling(false);
+            editor.setMinLines(2);
+            editor.setMaxLines(5);
+            editor.setVerticalScrollBarEnabled(true);
+            jsDraft = prefs(a).getString("draft", "");
+            csharpDraft = prefs(a).getString("draftCSharp", "");
+            csharpMode = prefs(a).getBoolean("editorCsharpMode", true);
+            if (csharpMode) {
+                languageButton.setText("C#");
+                title.setText("Editor C#");
+                editor.setHint("Print(1 + 2);");
+                editor.setText(csharpDraft);
+            } else {
+                editor.setText(jsDraft);
+            }
+            hookCounters.setVisibility(csharpMode ? View.VISIBLE : View.GONE);
+            editor.setSelection(editor.getText().length());
+            editor.addTextChangedListener(new CodeWatcher(editor));
+            editor.setOnKeyListener(new View.OnKeyListener() {
+                @Override public boolean onKey(View v, int keyCode, KeyEvent e) {
+                    if (e.getAction() != KeyEvent.ACTION_DOWN) {
+                        // Voltar com o teclado ja fechado: fecha o console.
+                        if (keyCode == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP
+                            && keyboardHeight == 0) { hide(); return true; }
+                        return false;
+                    }
+                    // Teclado fisico: Ctrl+Enter roda.
+                    if (keyCode == KeyEvent.KEYCODE_ENTER && e.isCtrlPressed()) { run(); return true; }
+                    return false;
+                }
+            });
+            editRow.addView(editor, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            // O play do launcher (ic_start): o mesmo desenho do botao Jogar.
+            LinearLayout runButton = pill(a, icon(a, sprite(a, "ic_start"), 26), null, BUTTON);
+            runButton.setContentDescription(tr("Rodar"));
+            runButton.setMinimumWidth(px(a, 44));
+            runButton.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { run(); }
+            });
+            LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT);
+            rl.leftMargin = px(a, 6);
+            editRow.addView(runButton, rl);
+            LinearLayout.LayoutParams el = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            el.topMargin = px(a, 5);
+            inner.addView(editRow, el);
+
+            panel.addView(inner, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+            layout = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, restingHeight());
+            layout.gravity = Gravity.BOTTOM;
+            layout.leftMargin = px(a, 12);
+            layout.rightMargin = px(a, 12);
+            layout.bottomMargin = px(a, 8);
+            a.addContentView(panel, layout);
+
+            updateEditorHelp();
+            output.setText(csharpMode ? sCSharpOutput : sOutput);
+        }
+
+        // ---- mostrar, esconder, recolher ----
+
+        void show() {
+            if (showing) return;
+            showing = true;
+            removeFloatIcon();
+            hookCounters.setVisibility(csharpMode ? View.VISIBLE : View.GONE);
+            lastHookCountersPoll = 0;
+            place(0, false);
+            panel.setVisibility(View.VISIBLE);
+            // A tela do jogo nao sobe com o teclado: quem sobe e o painel.
+            WindowManager.LayoutParams wl = act.getWindow().getAttributes();
+            savedSoftInput = wl.softInputMode;
+            act.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                | (savedSoftInput & WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE));
+            keyboard = new KeyboardWatcher(act, this);
+            if (csharpMode) pullHookCounters();
+            handler.post(poll);
+            // Sem foco nem teclado ao abrir: o teclado cobria metade da tela
+            // antes de a pessoa decidir escrever. Ele abre no toque no editor.
+            scrollToEnd();
+            updateFreeze();
+        }
+
+        /** O X recolhe o painel; o atalho de JS continua disponivel. */
+        void hide() {
+            minimize();
+        }
+
+        /** O "_": o painel sai da tela e fica o icone de JS no lugar. */
+        void minimize() {
+            dismiss();
+            showFloatIcon(act);
+        }
+
+        private void dismiss() {
+            if (!showing) return;
+            showing = false;
+            saveDraft();
+            hideKeyboard();
+            editor.clearFocus();
+            if (keyboard != null) { keyboard.close(); keyboard = null; }
+            if (slide != null) slide.cancel();
+            keyboardHeight = 0;
+            layout.bottomMargin = px(act, 8);
+            layout.height = restingHeight();
+            panel.setLayoutParams(layout);
+            panel.setVisibility(View.GONE);
+            if (savedSoftInput >= 0) act.getWindow().setSoftInputMode(savedSoftInput);
+            handler.removeCallbacks(poll);
+            updateFreeze();
+        }
+
+        /** Tela cheia cobre o jogo e o congela; a janela deixa ele andar. */
+        void setFullscreen(boolean on) {
+            fullscreen = on;
+            fullButton.setText(on ? tr("Janela") : tr("Tela cheia"));
+            place(keyboardHeight, false);
+            updateFreeze();
+        }
+
+        /** Congelado so enquanto o Editor esta na tela, em tela cheia. */
+        void updateFreeze() {
+            try { CheatBridge.nSetGameFrozen(showing && fullscreen); } catch (Throwable t) { }
+        }
+
+        void hideKeyboard() {
+            InputMethodManager imm = (InputMethodManager) act.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(editor.getWindowToken(), 0);
+        }
+
+        // ---- o painel acompanha o teclado ----
+
+        /** Altura com o teclado fechado: pouco menos da metade da tela. */
+        int restingHeight() {
+            return Math.round(screenHeight() * 0.46f);
+        }
+
+        int screenHeight() {
+            View decor = act.getWindow().getDecorView();
+            int h = decor.getHeight();
+            return h > 0 ? h : act.getResources().getDisplayMetrics().heightPixels;
+        }
+
+        /** O teclado mudou de altura (0 = fechado): o painel vai para cima dele. */
+        @Override public void onKeyboard(int height) {
+            keyboardHeight = height;
+            place(height, true);
+        }
+
+        void place(int kb, boolean animate) {
+            final int fromBottom = layout.bottomMargin, fromHeight = panel.getHeight() > 0 ? panel.getHeight() : layout.height;
+            final int toBottom = fullscreen ? kb : kb + px(act, kb > 0 ? 4 : 8);
+            int available = screenHeight() - toBottom - px(act, 8);
+            final int toHeight = fullscreen ? screenHeight() - kb
+                : Math.max(px(act, 90), Math.min(restingHeight(), available));
+            layout.leftMargin = layout.rightMargin = fullscreen ? 0 : px(act, 12);
+            if (slide != null) slide.cancel();
+            if (!animate) {
+                layout.bottomMargin = toBottom;
+                layout.height = toHeight;
+                panel.setLayoutParams(layout);
+                scrollToEnd();
+                return;
+            }
+            // Pela margem e pela altura, nao por translacao: a Activity do jogo
+            // desenha por software, e View transladada so e redesenhada no
+            // quadro antigo (o mesmo cuidado do botao do menu).
+            slide = ValueAnimator.ofFloat(0f, 1f);
+            slide.setDuration(140);
+            slide.setInterpolator(new DecelerateInterpolator());
+            slide.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(ValueAnimator va) {
+                    float f = (Float) va.getAnimatedValue();
+                    layout.bottomMargin = Math.round(fromBottom + (toBottom - fromBottom) * f);
+                    layout.height = Math.round(fromHeight + (toHeight - fromHeight) * f);
+                    panel.setLayoutParams(layout);
+                }
+            });
+            slide.start();
+            panel.postDelayed(new Runnable() {
+                @Override public void run() { scrollToEnd(); }
+            }, 160);
+        }
+
+        // ---- rodar, historico, saida ----
+
+        void run() {
+            if (csharpMode) { runCSharp(); return; }
+            String code = editor.getText().toString();
+            if (code.trim().length() == 0) return;
+            appendEntry('i', code);
+            refreshOutput();
+            if (sHistory.isEmpty() || !sHistory.get(sHistory.size() - 1).equals(code)) {
+                sHistory.add(code);
+                while (sHistory.size() > MAX_HISTORY) sHistory.remove(0);
+                saveHistory(act);
+            }
+            historyIndex = -1;
+            scratch = "";
+            editor.setText("");
+            saveDraft();
+            try { CheatBridge.nConsoleRun(code); } catch (Throwable t) {
+                appendEntry('x', tr("o núcleo nativo não respondeu: %1$s", t));
+                refreshOutput();
+            }
+        }
+
+        void updateEditorHelp() {
+            editorHelp.setText(csharpMode
+                ? "C#: use Print(1 + 2); e toque no botao verde para executar.\nMods: salve o arquivo .cs e reinicie o jogo para aplicar."
+                : tr("JS: Main, ID e player já estão prontos. print(...) escreve no chat; bl.log(...), no log.\nlet/const valem só nesta execução; para guardar valores, use var ou globalThis.x."));
+        }
+
+        void switchEditorLanguage() {
+            saveDraft();
+            if (!csharpMode) {
+                jsDraft = editor.getText().toString();
+                csharpMode = true;
+                languageButton.setText("C#");
+                editor.setHint("Print(1 + 2);");
+                editor.setText(csharpDraft);
+                title.setText("Editor C#");
+            } else {
+                csharpDraft = editor.getText().toString();
+                csharpMode = false;
+                languageButton.setText("JS");
+                editor.setHint("player.statLife = 500");
+                editor.setText(jsDraft);
+                title.setText("Editor JS");
+            }
+            editor.setSelection(editor.getText().length());
+            hookCounters.setVisibility(csharpMode ? View.VISIBLE : View.GONE);
+            updateEditorHelp();
+            prefs(act).edit().putBoolean("editorCsharpMode", csharpMode).apply();
+            lastHookCountersPoll = 0;
+            if (csharpMode) pullHookCounters();
+            appendEntry('i', csharpMode
+                ? "C#: escreva Print(1 + 2); e toque no botao verde. Roslyn compila e MonoVM executa sem QuickJS."
+                : "JS: o botao verde executa o codigo no motor QuickJS.");
+            refreshOutput();
+        }
+
+        void runCSharp() {
+            String code = editor.getText().toString().trim();
+            if (code.length() == 0) return;
+            if (code.length() > 8192) {
+                appendEntry('x', "C#: limite de 8192 caracteres por execucao");
+                refreshOutput();
+                return;
+            }
+            String id = UUID.randomUUID().toString();
+            File work = new File(act.getFilesDir(), "bunny-csharp");
+            File root = new File(new File(work, "interactive"), id);
+            File content = new File(root, "content");
+            try {
+                if (!content.isDirectory() && !content.mkdirs())
+                    throw new java.io.IOException("Pasta temporaria indisponivel");
+                boolean expression = !code.contains(";") && !code.contains("\n")
+                        && !code.contains("{") && !code.contains("}");
+                String statements = expression ? "Print(" + code + ");" : code;
+                String source = "using System;\nusing System.Text;\n" +
+                    "namespace BunnyLoader.Interactive {\n" +
+                    "public static class ConsoleEntry {\n" +
+                    "private static readonly StringBuilder Buffer = new StringBuilder();\n" +
+                    "public static void Print(object value) { Buffer.AppendLine(value == null ? \"null\" : value.ToString()); }\n" +
+                    "public static void Log(object value) { Print(value); }\n" +
+                    "public static string Run() {\n" +
+                    "Buffer.Clear();\n" + statements + "\n" +
+                    "return Buffer.Length == 0 ? \"Executado\" : Buffer.ToString();\n" +
+                    "}\n}\n}\n";
+                Files.write(new File(content, "ConsoleEntry.cs").toPath(),
+                            source.getBytes(StandardCharsets.UTF_8));
+                String error = CheatBridge.nCSharpConsoleRun(id, root.getCanonicalPath(),
+                                                             work.getCanonicalPath());
+                if (error != null && !error.isEmpty()) {
+                    appendEntry('x', "C#: " + error);
+                    refreshOutput();
+                    return;
+                }
+                appendEntry('i', "C# > " + code);
+                if (sCSharpHistory == null) sCSharpHistory = new ArrayList<String>();
+                if (sCSharpHistory.isEmpty() ||
+                    !sCSharpHistory.get(sCSharpHistory.size() - 1).equals(code)) {
+                    sCSharpHistory.add(code);
+                    while (sCSharpHistory.size() > MAX_HISTORY) sCSharpHistory.remove(0);
+                    saveHistory(act);
+                }
+                csharpDraft = "";
+                historyIndex = -1;
+                scratch = "";
+                editor.setText("");
+                saveDraft();
+            } catch (Exception exception) {
+                appendEntry('x', "C# nao iniciado: " + exception.getMessage());
+            }
+            refreshOutput();
+        }
+
+        void history(int step) {
+            ArrayList<String> active = csharpMode ? sCSharpHistory : sHistory;
+            if (active == null || active.isEmpty()) return;
+            if (historyIndex < 0) {
+                if (step > 0) return;
+                scratch = editor.getText().toString();
+                historyIndex = active.size();
+            }
+            historyIndex += step;
+            if (historyIndex < 0) historyIndex = 0;
+            if (historyIndex >= active.size()) {
+                historyIndex = -1;
+                editor.setText(scratch);
+            } else {
+                editor.setText(active.get(historyIndex));
+            }
+            editor.setSelection(editor.getText().length());
+        }
+
+        void pullHookCounters() {
+            if (!showing || !csharpMode) return;
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - lastHookCountersPoll < 850) return;
+            lastHookCountersPoll = now;
+            try {
+                String runtime = CheatBridge.nCSharpRuntimeStatus();
+                if (runtime == null || runtime.isEmpty())
+                    runtime = "C# exclusivo: aguardando | QuickJS: aguardando | MonoVM: aguardando";
+                String summary = runtime.split("\n", 2)[0];
+                if (!summary.equals(lastRuntimeStatusLine)) {
+                    lastRuntimeStatusLine = summary;
+                    appendEntry('l', "[C#] " + summary);
+                    refreshOutput();
+                }
+                String current = CheatBridge.nCSharpHookCounters();
+                if (current == null || current.isEmpty())
+                    current = "Hooks C#: aguardando MonoVM...";
+                current = runtime + "\n" + current;
+                if (!current.equals(lastHookCountersText)) {
+                    lastHookCountersText = current;
+                    hookCounters.setText(current);
+                }
+            } catch (Throwable error) {
+                String current = "Hooks C#: diagnostico indisponivel";
+                if (!current.equals(lastHookCountersText)) {
+                    lastHookCountersText = current;
+                    hookCounters.setText(current);
+                }
+            }
+        }
+
+        void pullOutput() {
+            boolean changed = false;
+            try {
+                if (csharpMode) {
+                    String[] cs = CheatBridge.nCSharpConsoleTake();
+                    if (cs != null) for (String entry : cs) {
+                        if (entry != null && !entry.isEmpty()) {
+                            appendEntry(entry.charAt(0), "[C#] " + entry.substring(1));
+                            changed = true;
+                        }
+                    }
+                } else {
+                    String[] js = CheatBridge.nConsoleTake();
+                    if (js != null) for (String entry : js) {
+                        if (entry != null && !entry.isEmpty()) {
+                            appendEntry(entry.charAt(0), entry.substring(1));
+                            changed = true;
+                        }
+                    }
+                }
+            } catch (Throwable error) {
+                appendEntry('x', "C# console: " + error);
+                changed = true;
+            }
+            if (changed) refreshOutput();
+        }
+
+        void refreshOutput() {
+            trimOutput();
+            output.setText(csharpMode ? sCSharpOutput : sOutput);
+            scrollToEnd();
+        }
+
+        void clearOutput() {
+            if (csharpMode) {
+                sCSharpOutput.clear();
+                sCSharpOutputLines = 0;
+            } else {
+                sOutput.clear();
+                sOutputLines = 0;
+            }
+            output.setText(csharpMode ? sCSharpOutput : sOutput);
+        }
+
+        void scrollToEnd() {
+            // scrollTo, e nao fullScroll: o fullScroll leva o FOCO para baixo e o
+            // teclado perdia o editor.
+            outputScroll.post(new Runnable() {
+                @Override public void run() {
+                    outputScroll.scrollTo(0, Math.max(0, output.getHeight() - outputScroll.getHeight()));
+                }
+            });
+        }
+
+        void saveDraft() {
+            try {
+                if (csharpMode) prefs(act).edit().putString("draftCSharp", editor.getText().toString()).apply();
+                else prefs(act).edit().putString("draft", editor.getText().toString()).apply();
+            } catch (Throwable ignored) { }
+        }
+
+        private View iconButton(Activity a, View iconView, String description, final Runnable action) {
+            FrameLayout b = new FrameLayout(a);
+            b.setBackground(CheatBridge.actionBackground(a, false));
+            b.setContentDescription(description);
+            FrameLayout.LayoutParams il = new FrameLayout.LayoutParams(px(a, 20), px(a, 20));
+            il.gravity = Gravity.CENTER;
+            b.addView(iconView, il);
+            b.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { action.run(); }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(a, 30), px(a, 26));
+            lp.leftMargin = px(a, 4);
+            b.setLayoutParams(lp);
+            return b;
+        }
+
+        private TextView textButton(Activity a, String label, int fill, final Runnable action) {
+            TextView t = text(a, label, 10, INK);
+            t.setGravity(Gravity.CENTER);
+            t.setBackground(fill == BUTTON ? CheatBridge.actionBackground(a, false) : panel(a, fill, OUTLINE));
+            t.setPadding(px(a, 8), 0, px(a, 8), 0);
+            t.setMinWidth(px(a, 30));
+            t.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { action.run(); }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, px(a, 26));
+            lp.leftMargin = px(a, 4);
+            t.setLayoutParams(lp);
+            return t;
+        }
+    }
+
+    /** Lado do icone flutuante do Editor, o mesmo do coelho do Mod Menu. */
+    private static final float FLOAT_SIZE = 40;
+
+    /** Atalho independente do Mod Menu e do painel, criado sem montar o Editor. */
+    static void showFloatIcon(final Activity act) {
+        if (!CheatBridge.sEditorOn || sFloatIcon != null || (sConsole != null && sConsole.showing)) return;
+        ImageView b = icon(act, sprite(act, "ic_js"), FLOAT_SIZE);
+        b.setPadding(px(act, 4), px(act, 4), px(act, 4), px(act, 4));
+        b.setBackground(panel(act, PANEL, OUTLINE));
+        b.setContentDescription(tr("Editor"));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px(act, FLOAT_SIZE), px(act, FLOAT_SIZE));
+        lp.gravity = Gravity.TOP | Gravity.START;
+        DisplayMetrics m = act.getResources().getDisplayMetrics();
+        // Ao lado do coelho, ou no centro se o Mod Menu estiver desligado.
+        int x = CheatBridge.sMenuOn ? m.widthPixels / 2 + px(act, 30) : (m.widthPixels - lp.width) / 2;
+        int y = px(act, 6);
+        try {
+            x = prefs(act).getInt("iconX", x);
+            y = prefs(act).getInt("iconY", y);
+        } catch (Throwable t) { }
+        lp.leftMargin = clamp(x, 0, m.widthPixels - lp.width);
+        lp.topMargin = clamp(y, 0, m.heightPixels - lp.height);
+        b.setOnTouchListener(new FloatDrag(act, new Runnable() {
+            @Override public void run() { openConsole(act); }
+        }));
+        act.addContentView(b, lp);
+        sFloatIcon = b;
+    }
+
+    private static void removeFloatIcon() {
+        if (sFloatIcon == null) return;
+        ViewGroup parent = (ViewGroup) sFloatIcon.getParent();
+        if (parent != null) parent.removeView(sFloatIcon);
+        sFloatIcon = null;
+    }
+
+    private static int clamp(float v, int min, int max) {
+        if (max < min) max = min;
+        return Math.round(v < min ? min : v > max ? max : v);
+    }
+
+    /**
+     * O icone flutuante: toque abre, arrastar leva junto (e lembra onde ficou).
+     * Como o coelho do Mod Menu: move pelas margens, porque a Activity do jogo
+     * desenha por software e View transladada nao e redesenhada no lugar novo.
+     */
+    private static final class FloatDrag implements View.OnTouchListener {
+        private final Activity act;
+        private final Runnable onTap;
+        private final int touchSlop;
+        private float x0, y0;
+        private int m0x, m0y;
+        private boolean dragging;
+
+        FloatDrag(Activity a, Runnable tap) {
+            act = a;
+            onTap = tap;
+            touchSlop = ViewConfiguration.get(a).getScaledTouchSlop();
+        }
+
+        @Override public boolean onTouch(View v, MotionEvent e) {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    x0 = e.getRawX();
+                    y0 = e.getRawY();
+                    m0x = lp.leftMargin;
+                    m0y = lp.topMargin;
+                    dragging = false;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    float dx = e.getRawX() - x0, dy = e.getRawY() - y0;
+                    if (!dragging && Math.abs(dx) < touchSlop && Math.abs(dy) < touchSlop) return true;
+                    dragging = true;
+                    View parent = (View) v.getParent();
+                    lp.leftMargin = clamp(m0x + dx, 0, parent.getWidth() - v.getWidth());
+                    lp.topMargin = clamp(m0y + dy, 0, parent.getHeight() - v.getHeight());
+                    v.setLayoutParams(lp);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (dragging) {
+                        try {
+                            prefs(act).edit().putInt("iconX", lp.leftMargin).putInt("iconY", lp.topMargin).apply();
+                        } catch (Throwable t) { }
+                    } else if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                        onTap.run();
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    /** As setas do menu, giradas: -90 aponta para cima, 90 para baixo. */
+    private static View arrow(Activity a, float degrees) {
+        ImageView v = icon(a, sprite(a, "ic_seta_dir"), 16);
+        v.setRotation(degrees);
+        return v;
+    }
+
+    // ================================ o teclado ================================
+
+    /**
+     * A altura do teclado, de qualquer versao do Android.
+     *
+     * Uma PopupWindow de largura zero e altura da tela, que o teclado
+     * redimensiona (ADJUST_RESIZE, a dela); a diferenca entre a tela e a parte
+     * visivel dela e o teclado. Funciona com a janela do jogo em tela cheia e
+     * em ADJUST_NOTHING, que e justamente quando a janela do jogo nao sabe do
+     * teclado.
+     */
+    /** Quem quer saber a altura do teclado (0 = fechado). */
+    interface KeyboardListener {
+        void onKeyboard(int height);
+    }
+
+    static final class KeyboardWatcher implements ViewTreeObserver.OnGlobalLayoutListener {
+        private final Activity act;
+        private final KeyboardListener listener;
+        private final View probe;
+        private final PopupWindow popup;
+        private final Rect frame = new Rect();
+        private int last = -1;
+
+        KeyboardWatcher(Activity a, KeyboardListener l) {
+            act = a;
+            listener = l;
+            probe = new View(a);
+            popup = new PopupWindow(probe, 0, ViewGroup.LayoutParams.MATCH_PARENT);
+            popup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                | WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED);
+            popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NEEDED);
+            popup.setFocusable(false);
+            popup.setTouchable(false);
+            probe.getViewTreeObserver().addOnGlobalLayoutListener(this);
+            final View decor = a.getWindow().getDecorView();
+            decor.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (!act.isFinishing()) popup.showAtLocation(decor, Gravity.NO_GRAVITY, 0, 0);
+                    } catch (Throwable t) { /* sem medida: o painel fica no pe da tela */ }
+                }
+            });
+        }
+
+        @Override public void onGlobalLayout() {
+            probe.getWindowVisibleDisplayFrame(frame);
+            View decor = act.getWindow().getDecorView();
+            int screen = decor.getHeight() > 0 ? decor.getHeight() : act.getResources().getDisplayMetrics().heightPixels;
+            int kb = screen - frame.bottom;
+            // A barra de navegacao que aparece junto nao e teclado.
+            if (kb < screen / 8) kb = 0;
+            if (kb != last) {
+                last = kb;
+                listener.onKeyboard(kb);
+            }
+        }
+
+        void close() {
+            probe.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+            try { popup.dismiss(); } catch (Throwable t) { }
+        }
+    }
+
+    // ================================ o editor ================================
+
+    /**
+     * Recuo automatico e cores de sintaxe.
+     *
+     * Enter repete o recuo da linha de cima (e acrescenta dois espacos depois
+     * de "{", "(" ou "["). As cores sao repintadas um instante depois da ultima
+     * tecla, e nao a cada uma.
+     */
+    private static final class CodeWatcher implements TextWatcher {
+        private static final Pattern TOKENS = Pattern.compile(
+            "(//[^\\n]*|/\\*[\\s\\S]*?(?:\\*/|$))"
+            + "|(\"(?:\\\\.|[^\"\\\\\\n])*\"?|'(?:\\\\.|[^'\\\\\\n])*'?|`(?:\\\\.|[^`\\\\])*`?)"
+            + "|\\b(\\d+(?:\\.\\d+)?)\\b"
+            + "|\\b(const|let|var|function|return|if|else|for|while|do|break|continue|new|class|"
+            + "extends|this|super|typeof|instanceof|of|in|try|catch|finally|throw|switch|case|"
+            + "default|null|undefined|true|false|async|await|delete|void)\\b"
+            + "|\\b(Terraria|Microsoft|System|bl|print|Main|ModItem|ModNPC|ModProjectile|ModPlayer|"
+            + "ModBuff|ModTile|ModSystem|ModContent|ModLoader|Vector2|Color|Rectangle|Rand|Ref|"
+            + "MathHelper|SoundEngine|SoundStyle)\\b");
+        private static final int[] COLORS = {
+            0,
+            0xFF7F8AB8,   // comentario
+            0xFF9CE37D,   // texto
+            0xFF7FD1FF,   // numero
+            0xFFFFD24A,   // palavra-chave
+            0xFFFF9EDB,   // API do jogo e do Bunny Loader
+        };
+        private static final long DELAY_MS = 120;
+
+        /** Marca das cores deste editor, para tirar so as nossas. */
+        private static final class Hl extends ForegroundColorSpan {
+            Hl(int c) { super(c); }
+        }
+
+        private final EditText editor;
+        private int indentAt = -1;
+        private String indent;
+        private boolean busy;
+        private final Runnable paint = new Runnable() {
+            @Override public void run() { colorize(); }
+        };
+
+        CodeWatcher(EditText e) {
+            editor = e;
+            e.post(paint);
+        }
+
+        @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+
+        @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+            if (busy || count != 1 || before != 0 || s.charAt(start) != '\n') return;
+            int lineStart = start - 1;
+            while (lineStart >= 0 && s.charAt(lineStart) != '\n') lineStart--;
+            lineStart++;
+            StringBuilder b = new StringBuilder();
+            for (int i = lineStart; i < start && s.charAt(i) == ' '; i++) b.append(' ');
+            int last = start - 1;
+            while (last >= lineStart && s.charAt(last) == ' ') last--;
+            if (last >= lineStart) {
+                char c = s.charAt(last);
+                if (c == '{' || c == '(' || c == '[') b.append("  ");
+            }
+            if (b.length() > 0) {
+                indentAt = start + 1;
+                indent = b.toString();
+            }
+        }
+
+        @Override public void afterTextChanged(Editable e) {
+            if (busy) return;
+            if (indent != null && indentAt >= 0 && indentAt <= e.length()) {
+                busy = true;
+                e.insert(indentAt, indent);
+                busy = false;
+            }
+            indent = null;
+            indentAt = -1;
+            editor.removeCallbacks(paint);
+            editor.postDelayed(paint, DELAY_MS);
+        }
+
+        private void colorize() {
+            Editable e = editor.getText();
+            for (Hl h : e.getSpans(0, e.length(), Hl.class)) e.removeSpan(h);
+            if (e.length() > 20000) return;   // colado enorme: sem cor, sem engasgo
+            Matcher m = TOKENS.matcher(e);
+            while (m.find()) {
+                for (int g = 1; g < COLORS.length; g++) {
+                    if (m.start(g) < 0) continue;
+                    e.setSpan(new Hl(COLORS[g]), m.start(g), m.end(g), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    break;
+                }
+            }
+        }
+    }
+}

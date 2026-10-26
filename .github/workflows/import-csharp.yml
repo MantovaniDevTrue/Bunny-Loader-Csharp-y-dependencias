@@ -1,4 +1,4 @@
-name: Importar fontes CSharp e dependencias
+name: Importar base CSharp
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: csharp-source-import
+  group: csharp-core-import
   cancel-in-progress: false
 
 jobs:
@@ -18,14 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - name: Checkout do repositorio de destino
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
-      - name: Baixar a revisao exata do projeto CSharp integrado
+      - name: Baixar base integrada anterior aos loaders experimentais
         env:
-          SOURCE_SHA: e03e7d8d29405ac23c7b084471d40089f97a1ab9
+          SOURCE_SHA: cfbe784ee3cbc0ba2fabafce56c59e6eac41b67b
         shell: bash
         run: |
           set -euo pipefail
@@ -34,79 +32,77 @@ jobs:
           git -C _source checkout --detach "$SOURCE_SHA"
           test "$(git -C _source rev-parse HEAD)" = "$SOURCE_SHA"
 
-      - name: Organizar codigo CSharp, Android e dependencias
+      - name: Substituir snapshot experimental pelo nucleo CSharp
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf app experiments samples tests tools gradle docs/csharp
+          rm -f build.gradle.kts settings.gradle.kts gradle.properties .gitattributes .gitignore keystore.properties.example
+          rm -f LICENSE.md LICENSING.md THIRD_PARTY_NOTICES.md TRADEMARKS.md CONTRIBUTING.md SECURITY.md
+          mkdir -p app experiments/csharp samples tests tools docs gradle
 
-          mkdir -p app experiments samples tests tools docs gradle
           rsync -a _source/app/ app/
-          rsync -a _source/experiments/csharp/ experiments/csharp/
-          rsync -a _source/tests/ tests/
-          rsync -a _source/tools/ tools/
-          rsync -a _source/gradle/ gradle/
-          rsync -a _source/docs/csharp/ docs/csharp/
-
-          for entry in _source/samples/*; do
-            [ -d "$entry" ] || continue
-            name="$(basename "$entry")"
-            case "$name" in
-              *CSharp*|NativeAccessProbe|NativePlacementProbe|PureCSharpNativeMod)
-                rsync -a "$entry/" "samples/$name/"
-                ;;
-            esac
+          for module in BunnyCsSdk BunnySourceSdk BunnySourceCompiler BunnyManagedProbe BunnyCsPackager; do
+            test -d "_source/experiments/csharp/$module"
+            rsync -a "_source/experiments/csharp/$module/" "experiments/csharp/$module/"
           done
 
-          for entry in \
-            .gitattributes .gitignore \
-            build.gradle.kts settings.gradle.kts gradle.properties \
-            keystore.properties.example \
-            LICENSE.md LICENSING.md THIRD_PARTY_NOTICES.md TRADEMARKS.md \
-            CONTRIBUTING.md SECURITY.md; do
+          rsync -a _source/samples/ExampleMod/ samples/ExampleMod/
+          rsync -a _source/samples/HelloMod/ samples/HelloMod/
+          rsync -a _source/samples/StarterModCSharp/ samples/StarterModCSharp/
+          rsync -a _source/tests/ tests/
+          rsync -a --exclude='tests/' _source/tools/ tools/
+          rsync -a _source/gradle/ gradle/
+
+          for entry in .gitattributes .gitignore build.gradle.kts settings.gradle.kts gradle.properties keystore.properties.example LICENSE.md LICENSING.md THIRD_PARTY_NOTICES.md TRADEMARKS.md CONTRIBUTING.md SECURITY.md; do
             if [ -f "_source/$entry" ]; then
               cp -a "_source/$entry" "$entry"
             fi
           done
 
-          for entry in _source/docs/csharp*; do
-            [ -f "$entry" ] || continue
-            cp -a "$entry" docs/
-          done
-
-          printf '\n# Binarios do Mono e Roslyn distribuidos com o proprio projeto\n!app/src/main/jniLibs/arm64-v8a/*.so\n' >> .gitignore
+          printf '\n# Mono ARM64 incluido na entrega\n!app/src/main/jniLibs/arm64-v8a/*.so\n' >> .gitignore
 
           cat > SOURCE_VERSION.md <<'EOF'
-          # Fonte integrada
+          # Origem da base CSharp
 
-          - **Origem:** [MantovaniDevTrue/Bunnyloader-Csharp](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp)
-          - **Revisão utilizada:** \`e03e7d8d29405ac23c7b084471d40089f97a1ab9\`
-          - **Data da revisão:** 26/10/2026
-          - **Destino:** Bunny Loader C# com dependências e projeto Android
+          - Repositório: https://github.com/MantovaniDevTrue/Bunnyloader-Csharp
+          - Versão da fonte: v1.0 integrada, 19/10/2026
+          - Commit: cfbe784ee3cbc0ba2fabafce56c59e6eac41b67b
+          - Escopo: núcleo C#, projeto Android e dependências da mesma revisão
 
-          A fonte Android foi mantida nos caminhos originais para preservar os includes, o CMake, os serviços Kotlin/JNI e o empacotamento das DLLs e bibliotecas. O Mono modificado e suas licenças permanecem em \`tools/mono/\` e \`app/src/main/jniLibs/\`.
+          Esta entrega não inclui os loaders, QA e exemplos experimentais desenvolvidos posteriormente. O host Android e os dois exemplos JavaScript usados pelo próprio projeto original permanecem como dependências da integração; eles não executam os callbacks C#.
 
-          Não foram copiados dumps, binários proprietários do Terraria/Unity, recursos privados, tokens, chaves nem APKs. O port de loaders continua em desenvolvimento.
+          O runtime Mono modificado, as DLLs de Roslyn e SDK e as bibliotecas ARM64 pertencem ao mesmo snapshot. Os componentes proprietários do Terraria e chaves de assinatura não são distribuídos.
+
+          A importação e as verificações de integridade não equivalem a validar todas as funcionalidades do Terraria no dispositivo.
           EOF
 
-          test -f experiments/csharp/BunnySourceCompiler/BunnySourceCompiler.csproj
-          test -f experiments/csharp/BunnySourceSdk/BunnySourceSdk.csproj
           test -f experiments/csharp/BunnyCsSdk/BunnyCsSdk.csproj
+          test -f experiments/csharp/BunnySourceSdk/BunnySourceSdk.csproj
+          test -f experiments/csharp/BunnySourceCompiler/BunnySourceCompiler.csproj
+          test -f experiments/csharp/BunnyManagedProbe/BunnyManagedProbe.csproj
           test -f app/src/main/cpp/experiments/csharp/ManagedRuntime.cpp
           test -f app/src/main/kotlin/dev/bunnyloader/csharp/ManagedProbeService.kt
-          test -f app/src/main/assets/managed/framework.sha256
           test -f app/src/main/assets/managed/BunnySourceCompiler.dll
+          test -f app/src/main/assets/managed/framework.sha256
           test -f app/src/main/jniLibs/arm64-v8a/libmonosgen-2.0.so
           test -f tools/mono/prebuilt/arm64-v8a/DOTNET_RUNTIME_LICENSE.txt
-
-          test ! -e refs
-          test ! -e terraria1456_assets
+          test -f app/src/main/cpp/CMakeLists.txt
+          test -f samples/HelloMod/content/main.js
+          test -f samples/ExampleMod/content/main.js
+          test ! -d docs/csharp
+          test ! -d samples/ExampleModCSharp
+          test ! -d experiments/csharp/BunnyCsPrototype
+          test ! -d experiments/csharp/BunnyPrefixResearch
+          test ! -d experiments/csharp/BunnyVmBenchmark67
           test ! -e app/libs/unity-classes.jar
           test ! -e app/src/main/res/font/bunny.ttf
           test ! -e keystore.properties
 
-          find app experiments samples tests tools docs -type f | wc -l
+          printf 'Arquivos apos limpeza: '
+          find app experiments samples tests tools -type f | wc -l
 
-      - name: Registrar fontes no repositorio
+      - name: Publicar base limpa
         shell: bash
         run: |
           set -euo pipefail
@@ -116,8 +112,8 @@ jobs:
           git add -A
           git add -f app/src/main/jniLibs/arm64-v8a/*.so
           if git diff --cached --quiet; then
-            echo "Nenhuma mudanca pendente"
+            echo "Sem alteracoes"
             exit 0
           fi
-          git commit -m "feat: import full CSharp runtime, Android host and dependencies"
-          git push origin "HEAD:main"
+          git commit -m "refactor: replace experimental snapshot with CSharp core and matching dependencies"
+          git push origin HEAD:main

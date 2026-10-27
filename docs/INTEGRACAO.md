@@ -1,40 +1,35 @@
-# Integração do suporte C#
+# Integração C# no Bunny Loader
 
-Este repositório contém o núcleo C# do Bunny Loader integrado ao projeto Android, na revisão `v1.0` de 19/10/2026. Os arquivos nativos, gerenciados e as bibliotecas de runtime pertencem à mesma revisão.
+Esta versão corresponde ao commit [`4119582942c4`](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp/commit/4119582942c43b3dc52f4edf96c366a190630ac9), utilizado no APK 1.0.25 validado no Terraria Android.
 
-## Componentes
+## Fluxo de execução
 
-| Local | Responsabilidade |
-| --- | --- |
-| [`BunnyCsSdk`](../experiments/csharp/BunnyCsSdk/) | API pública dos mods |
-| [`BunnySourceSdk`](../experiments/csharp/BunnySourceSdk/) | Referências e contratos |
-| [`BunnySourceCompiler`](../experiments/csharp/BunnySourceCompiler/) | Compilação Roslyn |
-| [`BunnyManagedProbe`](../experiments/csharp/BunnyManagedProbe/) | Worker gerenciado |
-| [`ManagedRuntime.cpp`](../app/src/main/cpp/experiments/csharp/ManagedRuntime.cpp) | Ponte de execução MonoVM |
-| [`AutoSourceRuntime.cpp`](../app/src/main/cpp/experiments/csharp/AutoSourceRuntime.cpp) | Descoberta, preparação e carregamento das fontes |
-| [`ManagedProbeService.kt`](../app/src/main/kotlin/dev/bunnyloader/csharp/ManagedProbeService.kt) | Serviço Android C# |
-| [`CMakeLists.txt`](../app/src/main/cpp/CMakeLists.txt) | Integração do código nativo com o host |
+1. O host Android identifica os mods C# e prepara as fontes.
+2. O Roslyn compila os arquivos `.cs` com as referências do `BunnySourceSdk`.
+3. O MonoVM carrega os assemblies e executa as classes gerenciadas.
+4. As pontes JNI/C++ e IL2CPP registram o conteúdo e chamam os métodos do Terraria Android.
 
-## Fluxo
+Os callbacks escritos em C# não são convertidos em JavaScript. O JavaScript que permanece na árvore pertence ao host Bunny Loader e aos exemplos originais de seu build.
 
-O host inicializa o suporte C#, descobre os mods e prepara suas fontes. O Roslyn compila as classes usando o SDK, e o MonoVM carrega o código gerenciado. As pontes JNI/C++ e IL2CPP registram conteúdo e ligam eventos aos métodos do Terraria Android.
+## Organização
 
-O host continua com suas rotinas nativas e JavaScript para as demais funcionalidades do Bunny, mas não é necessário escrever callbacks C# como scripts JS.
+- **SDK e compilador:** `experiments/csharp/BunnyCsSdk/`, `BunnySourceSdk/` e `BunnySourceCompiler/`.
+- **Execução gerenciada:** `BunnyManagedProbe/` e `app/src/main/cpp/experiments/csharp/ManagedRuntime.cpp`.
+- **Carregamento:** `app/src/main/cpp/experiments/csharp/AutoSourceRuntime.cpp`.
+- **Ponte Android:** `app/src/main/kotlin/dev/bunnyloader/csharp/ManagedProbeService.kt`.
+- **Bibliotecas:** `app/src/main/assets/managed/`, `app/src/main/jniLibs/arm64-v8a/` e `tools/mono/`.
+- **Exemplo C#:** `samples/ExampleModCSharp/`.
 
-As operações que alteram objetos do Terraria precisam respeitar o contexto de execução, os hooks e as regras de ciclo de vida definidos pela integração nativa. Os contratos de cada loader dependem da versão do jogo.
+## Classes de dano
 
-## Arquivos essenciais para compilar
+A revisão integra `DamageClassLoader` e os hooks nativos de combate. Os cálculos consideram a classe de dano do item para dano, crítico, knockback e velocidade de uso. Também existe atualização das linhas de tooltip relacionadas aos atributos.
 
-A raiz conserva o Gradle e o projeto Android. Os fontes necessários incluem `app/src/main/cpp/`, `app/src/main/kotlin/`, `app/src/main/java/`, o CMake, o SDK gerenciado e os arquivos de suporte do Mono. O QuickJS do Bunny original também permanece porque faz parte do host.
+No Android, a obtenção do jogador local utiliza `Main.get_LocalPlayer`, evitando tratar `Main.myPlayer` como campo. Os logs de diagnóstico informam quando referências nativas necessárias não são encontradas e distinguem valores originais e valores finais aplicados.
 
-As dependências C# gerenciadas já estão em `app/src/main/assets/managed/`, e as bibliotecas Mono ARM64 em `app/src/main/jniLibs/arm64-v8a/`. Não é necessário combinar esses arquivos com binários de outra branch.
+## Validação
 
-Os dois exemplos originais de JavaScript mantidos em `samples/` são referenciados pelo build do Bunny. O `StarterModCSharp` serve apenas como exemplo de autoria; não é uma dependência do runtime.
+A [QA da revisão](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp/actions/runs/40434694323) aprovou contratos, compilação Android e empacotamento assinado. O APK foi testado no Terraria Android com resultado positivo. A sincronização deste repositório também executa testes gerenciados e nativos de `DamageClass`.
 
-## Escopo desta entrega
+A base conserva as interfaces de pesquisa e outras rotas da revisão original onde forem necessárias às dependências do host. O teste em aparelho confirma a build validada; APIs e exemplos não exercitados individualmente não devem ser anunciados como plenamente testados.
 
-A base integrada anterior foi selecionada para **não carregar os loaders experimentais da linha de QA atual**. Foram removidos os projetos e exemplos recentes que não são necessários ao funcionamento do núcleo. Os fontes do host Android foram mantidos porque alguns deles são dependências diretas dos arquivos C#.
-
-Esta seleção não altera a implementação interna de MonoVM, Roslyn, JNI, IL2CPP nem do compilador da revisão escolhida. A integridade dos arquivos foi conferida contra o commit de origem; uma build de verificação no GitHub não equivale a testar cada comportamento em um aparelho real.
-
-Consulte [Dependências](DEPENDENCIAS.md) e [Origem da base](../SOURCE_VERSION.md).
+Consulte [Dependências](DEPENDENCIAS.md) e [Origem](../SOURCE_VERSION.md).

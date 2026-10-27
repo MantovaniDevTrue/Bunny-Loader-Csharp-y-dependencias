@@ -26,6 +26,8 @@ string MethodName(MethodInfo method) => method.Name + (method.IsGenericMethodDef
 string Mode(Type type, MethodInfo method)
 {
     if (type == typeof(BunnyRecipeBehavior) || type == typeof(BunnyRecipeRuntime) || type == typeof(BunnyRecipeLoader)) return "worker_sync_recipe_snapshot";
+    if (type == typeof(BunnyShootRuntime) || type == typeof(BunnyShootSource)) return "worker_sync_shoot_snapshot";
+    if (type == typeof(BunnyShootContext) || type == typeof(BunnyShot)) return "worker_shoot_command_batch";
     if (type == typeof(BunnyCraftContext)) return "worker_craft_command_queue";
     if (type == typeof(BunnyRecipeCondition)) return "managed_predicate_composition";
     if (type == typeof(BunnyNativeScope) || type == typeof(BunnyNativeType) || type == typeof(BunnyNativeMember) ||
@@ -41,6 +43,10 @@ string Mode(Type type, MethodInfo method)
             "RegisterHooks" => "worker_registration",
             _ => "compile_policy"
         };
+    if (type == typeof(BunnyWorldSystem)) return "worker_async_entity";
+    if (type == typeof(DamageClass) || type == typeof(DamageClassLoader) ||
+        type == typeof(DamageClassPlayer))
+        return "managed_stat_snapshot_no_android_damage_hook";
     if (type == typeof(BunnyEntitySourceDispatcher)) return "worker_async_entity";
     if (type == typeof(BunnyNPC) && method.Name is "OnSpawn" or "AI" or "OnHit" or "OnKill" or "OnDespawn")
         return "worker_async_entity";
@@ -48,8 +54,14 @@ string Mode(Type type, MethodInfo method)
         parameter.ParameterType == typeof(BunnyProjectileAiState).MakeByRefType()))
         return "worker_async_entity";
     if (type == typeof(BunnyProjectile) && method.Name != "SetDefaults") return "compile_sampled_policy";
+    if (type == typeof(BunnyMount)) return "authoring_contract_native_registration_pending";
     if (type == typeof(BunnyPrefix)) return "compile_policy";
-    if (method.Name is "SetDefaults" or "SetStaticDefaults" or "AddRecipes" or "NumDust") return "compile_policy";
+    if (type == typeof(BunnyLocalizationModule))
+        return method.Name == "OnLocalizationsLoaded" ? "worker_async_localization" : "compile_policy";
+    if (type == typeof(BunnyLocalizationRuntime))
+        return method.Name == "Register" ? "managed_owned_registration" : "worker_async_localization";
+    if (method.Name == "NumDust") return method.GetParameters().Length == 1 ? "compile_policy" : "worker_sync_tile_snapshot";
+    if (method.Name is "SetDefaults" or "SetStaticDefaults" or "AddRecipes") return "compile_policy";
     if (type == typeof(BunnyVisual)) return "managed_command_queue";
     return "managed_helper";
 }

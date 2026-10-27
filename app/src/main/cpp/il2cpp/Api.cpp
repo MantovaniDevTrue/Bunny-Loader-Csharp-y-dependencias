@@ -75,6 +75,9 @@ bool Api::load() {
     bind(lib, "il2cpp_class_is_generic", &class_is_generic);
     ok &= bind(lib, "il2cpp_method_get_class", &method_get_class);
     ok &= bind(lib, "il2cpp_class_get_element_class", &class_get_element_class);
+    bindSoft(lib, "il2cpp_array_class_get", &array_class_get);
+    bindSoft(lib, "il2cpp_array_length", &array_length);
+    bindSoft(lib, "il2cpp_array_element_size", &array_element_size);
     bindSoft(lib, "il2cpp_class_get_rank", &class_get_rank);
     bindSoft(lib, "il2cpp_value_box", &value_box);
     ok &= bind(lib, "il2cpp_class_value_size", &class_value_size);
@@ -100,6 +103,8 @@ bool Api::load() {
     bindSoft(lib, "il2cpp_gchandle_new_weakref", &gchandle_new_weakref);
     bindSoft(lib, "il2cpp_type_get_object", &type_get_object);
     bindSoft(lib, "il2cpp_class_from_system_type", &class_from_system_type);
+    bindSoft(lib, "il2cpp_method_get_object", &method_get_object);
+    bindSoft(lib, "il2cpp_method_get_from_reflection", &method_get_from_reflection);
     bindSoft(lib, "il2cpp_class_get_declaring_type", &class_get_declaring_type);
     ok &= bind(lib, "il2cpp_thread_attach", &thread_attach);
     bindSoft(lib, "il2cpp_format_exception", &format_exception);

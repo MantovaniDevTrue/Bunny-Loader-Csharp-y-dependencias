@@ -4,6 +4,8 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
+using BunnyLoader.Source;
 
 namespace BunnyLoader.SourceCompiler;
 
@@ -16,12 +18,12 @@ internal static class BasicItemWriter
             ?? throw new InvalidOperationException(name+": propriedade ausente "+p));
         string[] keys={"Width","Height","MaxStack","Value","Rare","Damage","Crit","UseTime",
             "UseAnimation","UseStyle","Pick","Axe","Hammer"};
-        int[] min={0,0,1,0,-1,0,-100,0,0,0,0,0,0};
+        int[] min={0,0,1,0,-11,0,-100,0,0,0,0,0,0};
         int[] max={256,256,9999,100000000,11,1000,100,600,600,20,1000,200,1000};
         var parts=new List<string>{"ITEM",name};
         for(int i=0;i<keys.Length;i++) {
             int value=Get<int>(keys[i]);
-            if(value<min[i]||value>max[i])throw new InvalidOperationException(name+": "+keys[i]+" fora do limite");
+            if(value<min[i]||value>max[i]||(keys[i]=="Rare"&&value>-11&&value< -1))throw new InvalidOperationException(name+": "+keys[i]+" fora do limite");
             parts.Add(value.ToString(CultureInfo.InvariantCulture));
         }
         int flags=(Get<bool>("Melee")?1:0)|(Get<bool>("NoMelee")?2:0)|(Get<bool>("AutoReuse")?4:0)|
@@ -67,7 +69,7 @@ internal static class BasicItemWriter
         }
         int defense=Get<int>("Defense");
         if(defense<0||defense>1000)throw new InvalidOperationException(name+": Defense fora do limite");
-        if(defense>0) {
+        if(Get<bool>("HasDefenseOverride")) {
             while(parts.Count<23)parts.Add("-");
             parts.Add(defense.ToString(CultureInfo.InvariantCulture));
         }
@@ -82,6 +84,53 @@ internal static class BasicItemWriter
             if(Encoding.UTF8.GetByteCount(armor)>8192)throw new InvalidOperationException(name+": politica de armadura excede 8 KiB");
             while(parts.Count<25)parts.Add("-");
             parts.Add(armor);
+        }
+        var managed = (BunnyItem)item;
+        var lines = new List<BunnyTooltipLine> {
+            new("ItemName",Get<string>("DisplayName")),
+            new("Tooltip0",tooltip)
+        };
+        managed.ModifyTooltips(lines);
+        if(lines.Count>24)throw new InvalidOperationException(name+": tooltip line limit exceeded");
+        var options = new List<object>();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach(var line in lines) {
+            if(!line.Visible)continue;
+            if(string.IsNullOrEmpty(line.Name)||line.Name.Length>72||
+                line.Name.Any(ch=>!char.IsAsciiLetterOrDigit(ch)&&ch!='_')||
+                !names.Add(line.Name)||line.Text==null||Encoding.UTF8.GetByteCount(line.Text)>512)
+                throw new InvalidOperationException(name+": invalid tooltip line");
+            if(line.OverrideColor!=null&&
+                (line.OverrideColor.Length!=6||line.OverrideColor.Any(ch=>!Uri.IsHexDigit(ch))))
+                throw new InvalidOperationException(name+": invalid tooltip RGB");
+            var draw = new BunnyDrawableTooltipLine(line.Name);
+            bool defaultDraw = managed.PreDrawTooltipLine(draw);
+            if(!float.IsFinite(draw.WaveAmplitude)||draw.WaveAmplitude<0||draw.WaveAmplitude>12||
+                !float.IsFinite(draw.WaveSpeed)||draw.WaveSpeed<0||draw.WaveSpeed>32||
+                !float.IsFinite(draw.LetterStep)||draw.LetterStep<0||draw.LetterStep>6||
+                !float.IsFinite(draw.HueStep)||draw.HueStep<0||draw.HueStep>1||
+                !float.IsFinite(draw.HueSpeed)||draw.HueSpeed<0||draw.HueSpeed>5)
+                throw new InvalidOperationException(name+": invalid tooltip animation");
+            options.Add(new {name=line.Name,text=line.Text,color=line.OverrideColor??"",
+                draw=defaultDraw&&draw.DrawDefault, rainbow=draw.RainbowWave,
+                amplitude=draw.WaveAmplitude,speed=draw.WaveSpeed,
+                letterStep=draw.LetterStep,hueStep=draw.HueStep,hueSpeed=draw.HueSpeed});
+        }
+        bool active = options.Count!=2 ||
+            lines[0].OverrideColor!=null||lines[1].OverrideColor!=null||
+            managed.GetType().GetMethod(nameof(BunnyItem.ModifyTooltips))?.DeclaringType != typeof(BunnyItem)||
+            managed.GetType().GetMethod(nameof(BunnyItem.PreDrawTooltipLine))?.DeclaringType != typeof(BunnyItem);
+        if(active) {
+            string plan = JsonSerializer.Serialize(options);
+            if(Encoding.UTF8.GetByteCount(plan)>4096)
+                throw new InvalidOperationException(name+": tooltip draw plan too large");
+            while(parts.Count<26)parts.Add("-");
+            parts.Add(Convert.ToHexString(Encoding.UTF8.GetBytes(plan)));
+        }
+        string cloneOverrides=Get<string>("NativeCloneOverridesDefinition");
+        if(cloneOverrides.Length!=0) {
+            while(parts.Count<27)parts.Add("-");
+            parts.Add(cloneOverrides);
         }
         return string.Join("\t",parts);
     }

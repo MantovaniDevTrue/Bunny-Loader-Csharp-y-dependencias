@@ -1,9 +1,12 @@
 #pragma once
 #include "experiments/csharp/ManagedHitContextStats.h"
+#include "experiments/csharp/ManagedDustMailbox.h"
+#include "experiments/csharp/MonoWorldMailbox.h"
 #include "experiments/csharp/ManagedVisualQueue.h"
 #include "experiments/csharp/ManagedLiveEventQueue.h"
 #include "experiments/csharp/ManagedNpcBuffEffects.h"
 
+#include <chrono>
 #include <string>
 #include <cstdint>
 #include <vector>
@@ -11,7 +14,89 @@
 namespace bl::graphics { struct ScreenSceneRaw; }
 
 namespace bl::csharp {
+using ManagedLocalizationResultSink = bool (*)(const std::string& modId,
+    const std::string& assemblyPath, const std::string& culture,
+    uint64_t generation, const std::string& wire);
+void setManagedLocalizationResultSink(ManagedLocalizationResultSink sink);
+bool queueManagedLocalizationLoaded(const std::string& modId,
+                                   const std::string& assemblyPath,
+                                   const std::string& culture,
+                                   uint64_t generation);
+void unloadManagedLocalizationCallbacks(const std::string& modId);
+bool registerManagedDustSourceMod(const std::string& modId,
+                                  const std::string& assemblyPath,
+                                  const std::vector<std::pair<int, std::string>>& dustTypes);
+bool queueManagedDustCallback(int type, int phase,
+                              const ManagedDustState& state, uint64_t frame);
+bool invokeManagedDustSameFrame(int type, int phase,
+                                const ManagedDustState& state, uint64_t frame,
+                                std::chrono::steady_clock::time_point deadline,
+                                ManagedDustMailbox::Response* response);
+bool receiveManagedDustCallback(int type, int phase, int slot, int generation,
+                                uint64_t frame, ManagedDustMailbox::Response* response);
+void resetManagedDustSourceWorld();
+bool hasManagedDustType(int type);
+bool managedDustWorkerReady(int type);
+
+// Um mod C# pode expor BunnyLoader.Source.BunnyTouchEntry.Load() e
+// ProcessTriggers(). O trabalhador MonoVM executa ambos fora da game thread.
+bool registerManagedTouchEntry(const std::string& modId,
+                               const std::string& assemblyPath);
+void queueManagedTouchTriggerTick(uint64_t tick);
 bool managedRecipeRuntimeReady();
+// Durable, owner-scoped worker teardown; never waits for Mono on the caller.
+void unloadManagedRarityCallbacks(const std::string& mod);
+void queueManagedRecipeUnload(const std::string& mod,const std::string& assembly);
+bool queueManagedRarityWarmup(const std::string& mod, const std::string& assembly,
+    const std::string& identities);
+int managedRarityWarmupState(const std::string& mod, const std::string& assembly,
+    std::string* error);
+bool invokeManagedRarity(const std::string& mod, const std::string& assembly,
+    const std::string& owner, int kind, const std::string& snapshot,
+    std::string* output, int budgetMicroseconds = 1200);
+bool invokeManagedTile(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int callback,int x,int y,std::string* output,int budgetMicroseconds=1800);
+bool invokeManagedTileSapling(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,bool underground,int addon,bool ignoreWalls,
+    std::string* output,int budgetMicroseconds=850);
+bool invokeManagedTileDrops(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,std::string* output,int budgetMicroseconds=900);
+bool invokeManagedTileKillSound(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,bool fail,
+    std::string* output,int budgetMicroseconds=650);
+bool invokeManagedTileDustCount(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,bool fail,int count,
+    std::string* output,int budgetMicroseconds=700);
+bool invokeManagedTileCreateDust(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,int dustType,
+    std::string* output,int budgetMicroseconds=450);
+bool invokeManagedTileKill(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,bool fail,bool effectOnly,bool noItem,
+    std::string* output,int budgetMicroseconds=1100);
+bool queueManagedTileMultiKill(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,int frameX,int frameY);
+bool invokeManagedTileFrame(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,bool reset,bool noBreak,
+    std::string* output,int budgetMicroseconds=650);
+bool invokeManagedTileSmart(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,int lx,int ly,int hx,int hy,
+    std::string* output,int budgetMicroseconds=450);
+bool invokeManagedTileDraw(const std::string& mod,const std::string& assembly,
+    const std::string& owner,const std::string& snapshot,
+    std::string* output,int budgetMicroseconds=1200);
+bool queueManagedTileEvent(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int callback,int x,int y);
+bool queueManagedTileNearby(const std::string& mod,const std::string& assembly,
+    const std::string& owner,int x,int y,bool closer);
+bool queueManagedTileWarmup(const std::string& mod,const std::string& assembly,const std::string& owner);
+int managedTileWarmupState(const std::string& mod,const std::string& assembly,
+    const std::string& owner,std::string* error);
+// Shares the bounded worker transport, with its own dispatcher and prewarmed content instances.
+bool queueManagedShootWarmup(const std::string& mod,const std::string& assembly,const std::string& owner);
+int managedShootWarmupState(const std::string& mod,const std::string& assembly,const std::string& owner,std::string* error);
+bool invokeManagedShoot(const std::string& mod,const std::string& assembly,const std::string& owner,
+                        int kind,const std::string& snapshot,std::string* output);
+
 // Bounded request to the existing pinned Mono worker. No live IL2CPP objects cross threads.
 bool invokeManagedRecipe(const std::string& mod,const std::string& assembly,
                          const std::string& owner,int index,int kind,const std::string& snapshot,
@@ -34,6 +119,11 @@ bool readManagedScreenScene(const std::string& modId,
                             ManagedScreenLightResult* result);
 void pauseManagedScreenSceneCallbacks();
 
+
+// Apenas chamadas internas do host; mods C# não acessam esta fila.
+bool requestManagedWorldOnMono(const worldsave::MonoWorldRequest& request,
+                               worldsave::MonoWorldReply* reply, int timeoutMs);
+void invalidateManagedWorldMonoRequests();
 
 struct ManagedHurtResult {
     int damage = 0;
@@ -70,7 +160,14 @@ bool registerManagedEntitySourceMod(const std::string& modId,
 bool hasManagedEntityNpcType(int type);
 bool hasManagedEntityProjectileType(int type);
 bool managedEntitySourceModsRegistered();
+void scheduleManagedInvasionWorldTicks(uint64_t worldSession, int mode,
+                                       int playerIndex, float playerX, float playerY);
 void pauseManagedEntitySourceCallbacks();
+bool takeManagedEntityTileCollisionPolicy(int type,int slot,int generation,int owner,
+                                          uintptr_t identity,int* policy);
+bool queueManagedEntityTileCollision(int type, int slot, int generation, int owner,
+                                     uintptr_t identity, float oldVX, float oldVY,
+                                     float newVX, float newVY);
 bool queueManagedEntityCombatEvent(int eventKind, int type, int slot, int generation,
                                    int owner, uintptr_t identity, int damage, int targetIndex);
 
@@ -182,6 +279,8 @@ struct LiveSourceStatus {
     std::string error;
 };
 
+void invalidateManagedLiveSourceMod(const std::string& modId);
+void invalidateManagedDeferredSourceMod(const std::string& modId);
 LiveSourceStatus liveSourceStatus(const std::string& modId);
 bool invokeLiveSourceNpcAi(const std::string& modId,
                            const std::string& assemblyPath,
@@ -326,6 +425,11 @@ struct ManagedLivePerfStatus {
     int lockDrops = 0;
     std::vector<ManagedLivePerfProjectileStatus> projectiles;
 };
+
+bool bindManagedCommandMod(const std::string& modId, const std::string& assemblyPath,
+                           std::string* error);
+void notifyManagedCommandWorker();
+void resetManagedCommandSession();
 
 bool startManagedLivePerf(std::string* error);
 ManagedLivePerfStatus managedLivePerfStatus();

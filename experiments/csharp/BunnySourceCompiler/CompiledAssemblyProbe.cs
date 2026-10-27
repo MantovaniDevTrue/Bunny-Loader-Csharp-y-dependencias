@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Globalization;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Linq;
 using System.Collections.Generic;
 
@@ -65,7 +66,79 @@ public static class CompiledAssemblyProbe
             yield return ancestor;
     }
 
+    private static bool UsesLiveLocalizationRegister(Type[] types)
+    {
+        var opcodes = new Dictionary<ushort, OpCode>();
+        foreach (FieldInfo field in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+            if (field.GetValue(null) is OpCode code)
+                opcodes[unchecked((ushort)code.Value)] = code;
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic |
+            BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+        foreach (Type type in types)
+        {
+            foreach (MethodBase method in type.GetMethods(flags).Cast<MethodBase>()
+                .Concat(type.GetConstructors(flags)))
+            {
+                byte[]? il = method.GetMethodBody()?.GetILAsByteArray();
+                if (il == null) continue;
+                int position = 0;
+                while (position < il.Length)
+                {
+                    ushort raw = il[position++];
+                    if (raw == 0xFE)
+                    {
+                        if (position >= il.Length) break;
+                        raw = (ushort)(0xFE00 | il[position++]);
+                    }
+                    if (!opcodes.TryGetValue(raw, out OpCode code)) break;
+                    int operand = code.OperandType switch
+                    {
+                        OperandType.InlineNone => 0,
+                        OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or
+                            OperandType.ShortInlineVar => 1,
+                        OperandType.InlineVar => 2,
+                        OperandType.InlineI or OperandType.InlineBrTarget or
+                            OperandType.InlineField or OperandType.InlineMethod or
+                            OperandType.InlineSig or OperandType.InlineString or
+                            OperandType.InlineTok or OperandType.InlineType or
+                            OperandType.ShortInlineR => 4,
+                        OperandType.InlineI8 or OperandType.InlineR => 8,
+                        OperandType.InlineSwitch when position + 4 <= il.Length =>
+                            4 + 4 * Math.Clamp(BitConverter.ToInt32(il, position), 0,
+                                (il.Length - position - 4) / 4),
+                        _ => -1
+                    };
+                    if (operand < 0 || position + operand > il.Length) break;
+                    if (code.OperandType == OperandType.InlineMethod &&
+                        (raw == unchecked((ushort)OpCodes.Call.Value) ||
+                         raw == unchecked((ushort)OpCodes.Callvirt.Value)))
+                    {
+                        int token = BitConverter.ToInt32(il, position);
+                        try
+                        {
+                            MethodBase? target = method.Module.ResolveMethod(token,
+                                type.IsGenericType ? type.GetGenericArguments() : null,
+                                method.IsGenericMethod ? method.GetGenericArguments() : null);
+                            if (target?.DeclaringType?.FullName == "BunnyLoader.Source.BunnyLocalizationRuntime" &&
+                                target.Name == "Register") return true;
+                        }
+                        catch (ArgumentException) { }
+                        catch (BadImageFormatException) { }
+                        catch (NotSupportedException) { }
+                        catch (TypeLoadException) { }
+                        catch (FileNotFoundException) { }
+                    }
+                    position += operand;
+                }
+            }
+        }
+        return false;
+    }
+
     public static int Verify(string assemblyPath, string diagnosticsPath)
+        => Verify(assemblyPath, diagnosticsPath, "");
+
+    public static int Verify(string assemblyPath, string diagnosticsPath, string modRoot)
     {
         try
         {
@@ -89,8 +162,18 @@ public static class CompiledAssemblyProbe
             var projectileTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyProjectile"))
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var wallTypes = contentTypes.Where(type => IsContentType(type, "BunnyWall")).OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
             var tileTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyTile"))
+                .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var treeTypes = contentTypes
+                .Where(type => IsContentType(type, "BunnyTree"))
+                .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var goreTypes = contentTypes
+                .Where(type => IsContentType(type, "BunnyGore"))
+                .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var dustTypes = contentTypes
+                .Where(type => IsContentType(type, "BunnyDust"))
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
             var basicItemTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyItem"))
@@ -100,6 +183,9 @@ public static class CompiledAssemblyProbe
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
             var buffTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyBuff"))
+                .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var mountTypes = contentTypes
+                .Where(type => IsContentType(type, "BunnyMount"))
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
             var potionTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyBuffPotion"))
@@ -113,18 +199,50 @@ public static class CompiledAssemblyProbe
             var npcTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyNPC"))
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var hookTypes = contentTypes.Where(type => type.IsClass && !type.IsAbstract && !type.ContainsGenericParameters &&
+                Ancestors(type).Any(ancestor => ancestor.FullName == "BunnyLoader.Source.BunnyHookModule"))
+                .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+            if (hookTypes.Any(type => type.GetConstructor(Type.EmptyTypes) == null))
+                throw new InvalidOperationException("HookModule requires a public empty constructor");
+            var worldTypes = contentTypes
+                .Where(type => IsContentType(type, "BunnyWorldSystem"))
+                .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+            if (worldTypes.Length > 512 || worldTypes.Any(type =>
+                type.GetConstructor(Type.EmptyTypes) == null))
+                throw new InvalidOperationException("WorldSystem requires a public empty constructor");
             var prefixTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyPrefix"))
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var localizationTypes = contentTypes
+                .Where(type => type.IsClass && !type.IsAbstract && !type.ContainsGenericParameters &&
+                    type.BaseType?.FullName == "BunnyLoader.Source.BunnyLocalizationModule")
+                .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+            var rarityTypes = contentTypes
+                .Where(type => IsContentType(type, "BunnyRarity"))
+                .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
+            var damageClassTypes = contentTypes
+                .Where(type => type.IsClass && !type.IsAbstract && !type.ContainsGenericParameters &&
+                    typeof(BunnyLoader.Source.DamageClass).IsAssignableFrom(type) &&
+                    type.Assembly == assembly)
+                .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
+            if (damageClassTypes.Length > 118)
+                throw new InvalidOperationException("DamageClass count out of bounds");
+            foreach (Type cls in damageClassTypes)
+            {
+                if (typeof(BunnyLoader.Source.VanillaDamageClass).IsAssignableFrom(cls) ||
+                    cls.GetConstructor(Type.EmptyTypes) == null)
+                    throw new InvalidOperationException("Invalid DamageClass public constructor: " + cls.FullName);
+            }
             var screenEffectTypes = contentTypes
                 .Where(type => IsContentType(type, "BunnyScreenEffect"))
                 .OrderBy(type => type.Name, StringComparer.Ordinal).ToArray();
-            if (tileTypes.Length > 4096 || prefixTypes.Length > 4096 || npcTypes.Length > 4096 || accessoryTypes.Length > 4096 || playerTypes.Length > 4096 ||
+            int commandCount = CommandManifestWriter.CountCommands(assembly);
+            if (mountTypes.Length > 128 || treeTypes.Length > 255 || goreTypes.Length > 256 || dustTypes.Length > 4096 || wallTypes.Length > 4096 || tileTypes.Length > 4096 || rarityTypes.Length > 4096 || localizationTypes.Length > 32 || prefixTypes.Length > 4096 || npcTypes.Length > 4096 || accessoryTypes.Length > 4096 || playerTypes.Length > 4096 ||
                 projectileTypes.Length > 4096 ||
                 weaponTypes.Length > 4096 || basicItemTypes.Length > 4096 ||
                 buffTypes.Length > 4096 || potionTypes.Length > 4096 || screenEffectTypes.Length > 4096)
                 throw new InvalidOperationException("C# content class count out of bounds");
-            if (tileTypes.Length + basicItemTypes.Length + projectileTypes.Length + weaponTypes.Length + buffTypes.Length + potionTypes.Length + accessoryTypes.Length + playerTypes.Length + npcTypes.Length + prefixTypes.Length + screenEffectTypes.Length == 0)
+            if (mountTypes.Length + treeTypes.Length + goreTypes.Length + dustTypes.Length + wallTypes.Length + tileTypes.Length + basicItemTypes.Length + projectileTypes.Length + weaponTypes.Length + buffTypes.Length + potionTypes.Length + accessoryTypes.Length + playerTypes.Length + npcTypes.Length + prefixTypes.Length + screenEffectTypes.Length + rarityTypes.Length + localizationTypes.Length + commandCount + worldTypes.Length + hookTypes.Length + damageClassTypes.Length == 0)
                 throw new InvalidOperationException("C# assembly has no supported content types");
             bool fixture = projectileTypes.Any(t => t.FullName == "SourceCSharpMod.SourceBolt") &&
                 weaponTypes.Any(t => t.FullName == "SourceCSharpMod.SourceWand");
@@ -138,6 +256,11 @@ public static class CompiledAssemblyProbe
                     ? primaryWeapon! : CreateContent(type)).ToArray();
             object[] basicItems = basicItemTypes.Select(CreateContent).ToArray();
             object[] tiles = tileTypes.Select(CreateTileContent).ToArray();
+            object[] walls = wallTypes.Select(CreateTileContent).ToArray();
+            object[] dusts = dustTypes.Select(CreateTileContent).ToArray();
+            object[] trees = treeTypes.Select(CreateContent).ToArray();
+            object[] mounts = mountTypes.Select(CreateContent).ToArray();
+            object[] gores = goreTypes.Select(CreateContent).ToArray();
             object[] buffs = buffTypes.Select(CreateContent).ToArray();
             object[] potions = potionTypes.Select(CreateContent).ToArray();
             object[] accessories = accessoryTypes.Select(CreateContent).ToArray();
@@ -153,7 +276,12 @@ public static class CompiledAssemblyProbe
                     throw new InvalidOperationException(effect.GetType().FullName + ": exactly one ShaderFile or PipelineFile required");
             }
             WriteRuntimeDefaults(projectiles, weapons, buffs, potions,
-                accessories, players, npcs, prefixes, basicItems, tiles, diagnosticsPath);
+                accessories, players, npcs, prefixes, basicItems, tiles, walls, trees, mounts, gores, dusts, rarityTypes, diagnosticsPath);
+            commandCount = CommandManifestWriter.Write(assembly, diagnosticsPath, assemblyPath);
+            if (modRoot.Length != 0)
+                AppendManagedLocalization(modRoot, diagnosticsPath, localizationTypes,
+                    UsesLiveLocalizationRegister(contentTypes));
+
             WriteProjectileMotionPolicies(assembly, projectileTypes, diagnosticsPath);
             WriteAutomaticCombatPolicies(projectiles, diagnosticsPath);
             if (fixture)
@@ -165,17 +293,20 @@ public static class CompiledAssemblyProbe
                 WriteKillPolicy(primaryProjectile!, diagnosticsPath);
             }
             File.AppendAllText(diagnosticsPath,
-                "\nASSEMBLY_EXEC_OK classes=" + (tiles.Length + projectiles.Length + weapons.Length + buffs.Length + potions.Length + accessories.Length + players.Length + npcs.Length + prefixes.Length + basicItems.Length + screenEffects.Length) +
+                "\nASSEMBLY_EXEC_OK classes=" + (trees.Length + gores.Length + mounts.Length + dusts.Length + walls.Length + tiles.Length + projectiles.Length + weapons.Length + buffs.Length + potions.Length + accessories.Length + players.Length + npcs.Length + prefixes.Length + rarityTypes.Length + basicItems.Length + screenEffects.Length) +
+                " damageClasses=" + damageClassTypes.Length +
                 " projectiles=" + projectiles.Length + " weapons=" + weapons.Length +
                 " buffs=" + buffs.Length + " potions=" + potions.Length +
                 " accessories=" + accessories.Length + " players=" + players.Length +
-                " npcs=" + npcs.Length + " tiles=" + tiles.Length + " prefixes=" + prefixes.Length +
-                " screenEffects=" + screenEffects.Length +
+                " trees=" + trees.Length + " gores=" + gores.Length + " mounts=" + mounts.Length + " dusts=" + dusts.Length + " npcs=" + npcs.Length + " tiles=" + tiles.Length + " prefixes=" + prefixes.Length +
+                " rarities=" + rarityTypes.Length +
+                " screenEffects=" + screenEffects.Length + " localizationModules=" + localizationTypes.Length + " commands=" + commandCount +
+                " worldSystems=" + worldTypes.Length +
                 (fixture
                     ? " projectile=SourceBolt width=10 weapon=SourceWand damage=22 shoot=SourceBolt"
                     : " policy=generic-managed-defaults"));
             return projectiles.Length + weapons.Length + buffs.Length + potions.Length +
-                accessories.Length + players.Length + npcs.Length + prefixes.Length + basicItems.Length + tiles.Length + screenEffects.Length;
+                accessories.Length + players.Length + npcs.Length + prefixes.Length + basicItems.Length + tiles.Length + trees.Length + gores.Length + mounts.Length + dusts.Length + walls.Length + screenEffects.Length + rarityTypes.Length + localizationTypes.Length + commandCount + worldTypes.Length + hookTypes.Length + damageClassTypes.Length;
         }
         catch (Exception exception)
         {
@@ -185,6 +316,50 @@ public static class CompiledAssemblyProbe
         }
     }
 
+
+    private static void AppendManagedLocalization(string modRoot, string diagnosticsPath,
+        Type[] modules, bool liveRegister)
+    {
+        string source = Path.Combine(modRoot, "content");
+        var catalog = new BunnyLoader.Source.BunnyLocalizationCatalog();
+        int cultures = catalog.LoadFromContent("source", source);
+        foreach (Type type in modules)
+        {
+            if (type.GetConstructor(Type.EmptyTypes) == null)
+                throw new InvalidOperationException("BunnyLocalizationModule requires a public parameterless constructor: " + type.FullName);
+            var module = Activator.CreateInstance(type) as BunnyLoader.Source.BunnyLocalizationModule
+                ?? throw new InvalidOperationException("Failed to instantiate localization module: " + type.FullName);
+            module.RegisterTranslations(catalog);
+        }
+
+        if (cultures == 0 && modules.Length == 0 && !liveRegister) return;
+        foreach (string key in catalog.SnapshotForGame().Keys)
+            if (key.StartsWith("Mods.", StringComparison.Ordinal) &&
+                !key.StartsWith("Mods.source.", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "BunnyLocalizationModule cannot register keys owned by other mods: " + key);
+
+        IReadOnlyList<string> rows = catalog.ExportWireRows();
+        if (rows.Count > 16384)
+            throw new InvalidDataException("Localization wire exceeds row limit");
+        string output = Path.Combine(Path.GetDirectoryName(diagnosticsPath) ??
+            throw new InvalidOperationException("Missing diagnostics directory"), "source-runtime-values.txt");
+        using (var stream = new FileStream(output, FileMode.Append, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)))
+        {
+            if (modules.Length != 0)
+                writer.WriteLine("LOCALE_MODULES\t" + modules.Length);
+            if (liveRegister)
+                writer.WriteLine("LOCALE_RUNTIME\t1");
+            foreach (string row in rows)
+                writer.WriteLine(row);
+        }
+        File.AppendAllText(diagnosticsPath,
+            "\nMANAGED_LOCALIZATION_WIRE cultures=" + cultures +
+            " modules=" + modules.Length + " rows=" + rows.Count);
+    }
+
+
     private static object CreateContent(Type type)
     {
         object instance = Activator.CreateInstance(type)
@@ -193,8 +368,42 @@ public static class CompiledAssemblyProbe
         MethodInfo method = type.GetMethod("SetDefaults", BindingFlags.Public | BindingFlags.Instance)
             ?? throw new InvalidOperationException("Missing SetDefaults in " + type.Name);
         method.Invoke(instance, null);
+        if (IsContentType(type, "BunnyProjectile"))
+            InitializeProjectileStaticDefaults(instance);
         ValidateDeclaration(instance);
         return instance;
+    }
+
+    private static void InitializeProjectileStaticDefaults(object instance)
+    {
+        Type type = instance.GetType();
+        MethodInfo? method = type.GetMethod("SetStaticDefaults",
+            BindingFlags.Public | BindingFlags.Instance, binder: null,
+            types: Type.EmptyTypes, modifiers: null);
+        if (method == null || method.ReturnType != typeof(void) ||
+            method.ContainsGenericParameters ||
+            method.GetBaseDefinition().DeclaringType?.FullName != "BunnyLoader.Source.BunnyProjectile")
+            throw new InvalidOperationException(type.FullName + ": invalid SetStaticDefaults override");
+        method.Invoke(instance, null);
+    }
+
+    private static int DustHookMask(Type type)
+    {
+        Type dust = Ancestors(type).First(parent => parent.FullName == "BunnyLoader.Source.BunnyDust");
+        Type state = dust.Assembly.GetType("BunnyLoader.Source.BunnyDustState", throwOnError: true)!;
+        Type stateRef = state.MakeByRefType();
+        Type colorRef = typeof(uint).MakeByRefType();
+        bool Overrides(string name, params Type[] args)
+        {
+            MethodInfo? method = type.GetMethod(name, BindingFlags.Public | BindingFlags.Instance,
+                binder: null, types: args, modifiers: null);
+            return method != null && method.DeclaringType != dust;
+        }
+        return (Overrides("OnSpawn", stateRef) ? 1 : 0) |
+               (Overrides("Update", stateRef) ? 2 : 0) |
+               (Overrides("MidUpdate", stateRef) ? 4 : 0) |
+               (Overrides("GetAlpha", stateRef, colorRef) ? 8 : 0) |
+               (Overrides("PreDraw", stateRef) ? 16 : 0);
     }
 
     private static object CreateTileContent(Type type)
@@ -216,6 +425,7 @@ public static class CompiledAssemblyProbe
             throw new InvalidOperationException("SourceBolt base type invalid");
         object instance = Activator.CreateInstance(type)!;
         type.GetMethod("SetDefaults", BindingFlags.Public | BindingFlags.Instance)!.Invoke(instance, null);
+        InitializeProjectileStaticDefaults(instance);
         if ((int)type.GetProperty("Width")!.GetValue(instance)! != 10 ||
             (int)type.GetProperty("Height")!.GetValue(instance)! != 10 ||
             (int)type.GetProperty("AiStyle")!.GetValue(instance)! != 1 ||
@@ -511,10 +721,18 @@ public static class CompiledAssemblyProbe
             retarget.ToString(CultureInfo.InvariantCulture));
     }
 
+    private static bool ValidTreeName(string text) => text.Length>0&&text.Length<=72&&
+        text.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_');
+
+    private static bool ValidTreeStem(string stem) => stem.Length>0&&stem.Length<=160&&
+        stem[0]!='/'&&stem[^1]!='/'&&
+        stem.Split('/').All(segment=>segment.Length>0&&
+            segment.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_'||c=='-'));
+
     private static void WriteRuntimeDefaults(object[] projectiles, object[] weapons,
         object[] buffs, object[] potions, object[] accessories,
         object[] players, object[] npcs, object[] prefixes, object[] basicItems,
-        object[] tiles, string diagnosticsPath)
+        object[] tiles, object[] walls, object[] trees, object[] mounts, object[] gores, object[] dusts, Type[] rarityTypes, string diagnosticsPath)
     {
         static T Value<T>(object instance, string name) =>
             (T)(instance.GetType().GetProperty(name)?.GetValue(instance)
@@ -531,13 +749,70 @@ public static class CompiledAssemblyProbe
         }
 
         var names = new HashSet<string>(StringComparer.Ordinal);
+        var questFishNames = new HashSet<string>(StringComparer.Ordinal);
         var projectileNames = new HashSet<string>(StringComparer.Ordinal);
         var buffNames = new HashSet<string>(StringComparer.Ordinal);
         var lines = new List<string>(projectiles.Length + weapons.Length + buffs.Length +
-            potions.Length + accessories.Length + players.Length + npcs.Length + prefixes.Length + tiles.Length + 1)
+            potions.Length + accessories.Length + players.Length + npcs.Length + prefixes.Length + rarityTypes.Length + tiles.Length + dusts.Length + 1)
         {
             "BUNNY_MANAGED_DEFAULTS_V2"
         };
+        foreach (object wall in walls) {
+            string name = wall.GetType().Name;
+            CheckName(name);
+            if (!names.Add("WALL:" + name)) throw new InvalidOperationException("Duplicate BunnyWall: " + name);
+            lines.Add(Value<string>(wall, "NativeDefinition"));
+        }
+        foreach (object gore in gores)
+        {
+            string name=gore.GetType().Name;
+            CheckName(name);
+            if(!names.Add("GORE:"+name))
+                throw new InvalidOperationException("Duplicate BunnyGore: "+name);
+            string texture=Value<string>(gore,"Texture");
+            int ai=Value<int>(gore,"SpecialAI");
+            bool safe=Value<bool>(gore,"SafeGore");
+            if(!ValidTreeStem(texture)||ai<0||ai>255)
+                throw new InvalidOperationException(name+": invalid BunnyGore descriptor");
+            lines.Add(string.Join("\t","GORE",name,texture,ai,safe?"1":"0"));
+        }
+        foreach (object mount in mounts)
+        {
+            string name=mount.GetType().Name;
+            CheckName(name);
+            if(!names.Add("MOUNT:"+name))
+                throw new InvalidOperationException("Duplicate BunnyMount: "+name);
+            string wire=Value<string>(mount,"NativeDefinition");
+            if(!wire.StartsWith("M1|",StringComparison.Ordinal)||wire.Length>2048)
+                throw new InvalidOperationException("Invalid BunnyMount M1: "+name);
+            lines.Add(string.Join("\t","MOUNT",name,wire));
+        }
+        foreach (object tree in trees)
+        {
+            string name=tree.GetType().Name;
+            CheckName(name);
+            if(!names.Add("TREE:"+name))throw new InvalidOperationException("Duplicate BunnyTree: "+name);
+            string texture=Value<string>(tree,"Texture");
+            string ground=Value<string>(tree,"GrowsOnTile");
+            string sapling=Value<string>(tree,"SaplingTile");
+            string wood=Value<string>(tree,"WoodItem");
+            bool acorns=Value<bool>(tree,"CanDropAcorn");
+            int leaf=Value<int>(tree,"LeafGoreType");
+            string leafName=Value<string>(tree,"LeafGoreName");
+            int dust=Value<int>(tree,"DustType");
+            string shake=Value<string>(tree,"ShakeItem");
+            bool shakeLeaves=Value<bool>(tree,"ShakeLeaves");
+            if(!ValidTreeStem(texture)||!ValidTreeName(ground)||!ValidTreeName(sapling)||
+               (wood.Length>0&&!ValidTreeName(wood))||
+               leaf< -1||leaf>=32768||dust<0||dust>1999||
+               (leafName.Length>0&&(!ValidTreeName(leafName)||leaf>=0))||
+               (shake.Length>0&&!ValidTreeName(shake)))
+                throw new InvalidOperationException(name+": invalid BunnyTree descriptor");
+            lines.Add(string.Join("\t","TREE",name,ground,sapling,texture,
+                wood.Length==0?"-":wood,acorns?"1":"0",leaf,dust,
+                shake.Length==0?"-":shake,shakeLeaves?"1":"0",
+                leafName.Length==0?"-":leafName));
+        }
         foreach (object tile in tiles)
         {
             string name = tile.GetType().Name;
@@ -546,12 +821,93 @@ public static class CompiledAssemblyProbe
                 throw new InvalidOperationException("Duplicate BunnyTile: " + name);
             lines.Add(TileWriter.Write(tile));
         }
+        foreach (object dust in dusts)
+        {
+            Type type = dust.GetType();
+            string name = type.Name;
+            CheckName(name);
+            if (!names.Add("DUST:" + name))
+                throw new InvalidOperationException("Duplicate BunnyDust: " + name);
+            string texture = Value<string>(dust, "Texture");
+            int updateType = Value<int>(dust, "UpdateType");
+            if (updateType < -1 || updateType >= 332 ||
+                texture.Length > 240 || texture.Contains((char)92) ||
+                texture.Contains("..") || texture.Contains('|') ||
+                texture.Contains(':') || texture.StartsWith('/'))
+                throw new InvalidOperationException("Invalid BunnyDust defaults: " + name);
+            int hooks = DustHookMask(type);
+            lines.Add(string.Join("\t", "DUST", name,
+                updateType.ToString(CultureInfo.InvariantCulture),
+                hooks.ToString(CultureInfo.InvariantCulture),
+                texture.Length == 0 ? "-" : texture));
+        }
         foreach (object item in basicItems)
         {
             string name=item.GetType().Name;
             CheckName(name);
             if(!names.Add("ITEM:" + name)) throw new InvalidOperationException("Duplicate BunnyItem: "+name);
             lines.Add(BasicItemWriter.Write(item));
+            string mountName=Value<string>(item,"Mount");
+            if(mountName.Length>0)
+            {
+                CheckName(mountName);
+                lines.Add(string.Join("\t","MOUNT_ITEM",name,mountName));
+            }
+            if (Value<bool>(item, "QuestFish"))
+            {
+                questFishNames.Add(name);
+                if (Value<int>(item, "MaxStack") != 1)
+                    throw new InvalidOperationException("Quest fish must have MaxStack=1: " + name);
+                bool pre = Value<bool>(item, "QuestAvailableInPreHardmode");
+                bool hard = Value<bool>(item, "QuestAvailableInHardmode");
+                if (!pre && !hard)
+                    throw new InvalidOperationException("Quest fish cannot be unavailable in both world phases: " + name);
+                string description = Value<string>(item, "QuestDescription") ?? "";
+                string location = Value<string>(item, "QuestCatchLocation") ?? "";
+                foreach (string value in new[] { description, location })
+                {
+                    if (System.Text.Encoding.UTF8.GetByteCount(value) > 512 ||
+                        value.Any(c => c == '\0' || c == '\r' || c == '\t' || c == (char)127))
+                        throw new InvalidOperationException("Invalid angler quest chat text: " + name);
+                }
+                static string EncodeQuestText(string value) =>
+                    value.Length == 0 ? "-" : Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(value));
+                int rules = Convert.ToInt32(Value<object>(item, "QuestCatchRules"), CultureInfo.InvariantCulture);
+                if ((rules & ~3) != 0)
+                    throw new InvalidOperationException("Unknown quest catch requirements: " + name);
+                lines.Add(string.Join("\t", "QUEST_FISH", name,
+                    pre ? "1" : "0", hard ? "1" : "0",
+                    EncodeQuestText(description), EncodeQuestText(location),
+                    rules.ToString(CultureInfo.InvariantCulture)));
+                int callbackMask=(item.GetType().GetProperty("QuestAvailableWhen")?.GetValue(item) is Delegate?1:0) |
+                    (item.GetType().GetProperty("QuestCanCatchWhen")?.GetValue(item) is Delegate?2:0);
+                if(callbackMask!=0)
+                    lines.Add(string.Join("\t","QUEST_CALLBACK",name,callbackMask.ToString(CultureInfo.InvariantCulture)));
+                var descriptions = Value<Dictionary<string,string>>(item, "QuestDescriptionTranslations");
+                var locations = Value<Dictionary<string,string>>(item, "QuestCatchLocationTranslations");
+                var cultures = descriptions.Keys.Concat(locations.Keys)
+                    .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+                if (cultures.Length > 8)
+                    throw new InvalidOperationException("Too many quest dialogue cultures: " + name);
+                foreach (string culture in cultures)
+                {
+                    if (culture.Length < 2 || culture.Length > 20 ||
+                        culture.Any(ch => !((ch >= 'A' && ch <= 'Z') ||
+                                            (ch >= 'a' && ch <= 'z') ||
+                                            (ch >= '0' && ch <= '9') || ch == '-')))
+                        throw new InvalidOperationException("Invalid quest dialogue culture: " + name);
+                    string translatedDescription = descriptions.TryGetValue(culture, out var d) ? d : "";
+                    string translatedLocation = locations.TryGetValue(culture, out var l) ? l : "";
+                    if (translatedDescription.Length == 0 && translatedLocation.Length == 0)
+                        throw new InvalidOperationException("Empty quest dialogue translation: " + name);
+                    foreach (string value in new[] { translatedDescription, translatedLocation })
+                        if (System.Text.Encoding.UTF8.GetByteCount(value) > 512 ||
+                            value.Any(ch => ch == '\0' || ch == '\r' || ch == '\t' || ch == (char)127))
+                            throw new InvalidOperationException("Invalid translated quest dialogue: " + name);
+                    lines.Add(string.Join("\t", "QUEST_LOCALE", name, culture,
+                        EncodeQuestText(translatedDescription), EncodeQuestText(translatedLocation)));
+                }
+            }
         }
         foreach (object projectile in projectiles)
         {
@@ -583,6 +939,34 @@ public static class CompiledAssemblyProbe
                 throw new InvalidOperationException("[CSharp][ERROR][ProjectilePolicy] Class="+projectile.GetType().FullName+" Stage=SetDefaults Expected=AnimationFrameTicks1..120,MinionScanTicks1..120,MinionTargetRange1..4000 Actual="+frameTicks+","+scanTicks+","+range+" Reason=OutOfRange");
             float minionSlots = Value<float>(projectile, "MinionSlots");
             bool tileCollide = Value<bool>(projectile, "TileCollide");
+            int tileCollisionMode = Convert.ToInt32(projectile.GetType().GetProperty("TileCollisionMode")!.GetValue(projectile), CultureInfo.InvariantCulture);
+            if (tileCollisionMode < 0 || tileCollisionMode > 3 || (tileCollisionMode != 0 && !tileCollide))
+                throw new InvalidOperationException("Invalid projectile TileCollisionMode: " + name);
+            float restitution = Value<float>(projectile, "BounceRestitution");
+            float minimumSpeed = Value<float>(projectile, "BounceMinimumSpeed");
+            bool customBounce = restitution != 1f || minimumSpeed != 0f;
+            int platformMode = Convert.ToInt32(projectile.GetType().GetProperty("TilePlatformCollision")!.GetValue(projectile), CultureInfo.InvariantCulture);
+            if (platformMode < 0 || platformMode > 2 ||
+                (platformMode != 0 && !tileCollide))
+                throw new InvalidOperationException("Invalid projectile TilePlatformCollision: " + name);
+            int boxWidth = Value<int>(projectile, "TileCollisionBoxWidth");
+            int boxHeight = Value<int>(projectile, "TileCollisionBoxHeight");
+            float offsetX = Value<float>(projectile, "TileCollisionAnchorOffsetX");
+            float offsetY = Value<float>(projectile, "TileCollisionAnchorOffsetY");
+            bool customBox = boxWidth != 0 || boxHeight != 0 || offsetX != 0f || offsetY != 0f;
+            if (boxWidth < 0 || boxWidth > 512 || boxHeight < 0 || boxHeight > 512 ||
+                !float.IsFinite(offsetX) || !float.IsFinite(offsetY) ||
+                offsetX < -256f || offsetX > 256f || offsetY < -256f || offsetY > 256f ||
+                (customBox && !tileCollide))
+                throw new InvalidOperationException("Invalid projectile TileCollisionBox/Anchor: " + name);
+            int survivalLimit = Value<int>(projectile, "TileCollisionSurvivalLimit");
+            if (survivalLimit < 0 || survivalLimit > 64 ||
+                (survivalLimit != 0 && tileCollisionMode == 0))
+                throw new InvalidOperationException("Invalid projectile TileCollisionSurvivalLimit: " + name);
+            if (!float.IsFinite(restitution) || restitution < 0f || restitution > 2f ||
+                !float.IsFinite(minimumSpeed) || minimumSpeed < 0f || minimumSpeed > 64f ||
+                (customBounce && tileCollisionMode != 2))
+                throw new InvalidOperationException("Invalid projectile BounceRestitution/BounceMinimumSpeed: " + name);
             bool ignoreWater = Value<bool>(projectile, "IgnoreWater");
             if (!float.IsFinite(minionSlots) || (minion && (minionSlots <= 0 || minionSlots > 10)) ||
                 (!minion && minionSlots != 0))
@@ -594,16 +978,31 @@ public static class CompiledAssemblyProbe
                 Value<int>(projectile, "Penetrate").ToString(CultureInfo.InvariantCulture),
                 Value<int>(projectile, "TimeLeft").ToString(CultureInfo.InvariantCulture),
                 Value<bool>(projectile, "Friendly") ? "1" : "0");
-            if (minion || !tileCollide || !ignoreWater || frames > 1 || customPolicy || contactDamage)
+            if (minion || !tileCollide || !ignoreWater || frames > 1 || customPolicy || contactDamage || tileCollisionMode != 0 || platformMode != 0 || customBox)
             {
                 entry += "\t" + (minion ? "1" : "0") + "\t" +
                     minionSlots.ToString("R", CultureInfo.InvariantCulture) + "\t" +
                     (tileCollide ? "1" : "0") + "\t" + (ignoreWater ? "1" : "0");
-                if (frames > 1 || customPolicy || contactDamage) entry += "\t" + frames.ToString(CultureInfo.InvariantCulture);
-                if(customPolicy || contactDamage)
+                if (frames > 1 || customPolicy || contactDamage || tileCollisionMode != 0 || platformMode != 0 || customBox) entry += "\t" + frames.ToString(CultureInfo.InvariantCulture);
+                if(customPolicy || contactDamage || tileCollisionMode != 0 || platformMode != 0 || customBox)
                     entry+="\t"+frameTicks.ToString(CultureInfo.InvariantCulture)+"\t"+scanTicks.ToString(CultureInfo.InvariantCulture)+"\t"+range.ToString("R",CultureInfo.InvariantCulture);
-                if (contactDamage || motion!=null) entry += "\t"+(contactDamage?"1":"0");
+                if (contactDamage || motion!=null || tileCollisionMode != 0 || platformMode != 0 || customBox) entry += "\t"+(contactDamage?"1":"0");
                 if(motion!=null)entry+="\t"+string.Join(",",new[]{"FollowSpeed","AttackSpeed","CatchUpSpeed","FollowInertia","AttackInertia","FollowOffsetX","FollowOffsetY","CatchUpDistance","IdleDistance","IdleDamping","CatchUpInertia","TeleportDistance","FormationSpacing","AttackStopDistance","OwnerLeashDistance","RotationFactor","Separation"}.Select(property=>Value<float>(motion,property).ToString("R",CultureInfo.InvariantCulture)));
+                else if(tileCollisionMode != 0 || platformMode != 0 || customBox)entry+="\t-";
+                if(tileCollisionMode != 0 || platformMode != 0 || customBox)
+                    entry+="\t"+tileCollisionMode.ToString(CultureInfo.InvariantCulture);
+                if(customBounce || survivalLimit != 0 || platformMode != 0 || customBox)
+                    entry+="\t"+restitution.ToString("R",CultureInfo.InvariantCulture)+
+                    "\t"+minimumSpeed.ToString("R",CultureInfo.InvariantCulture);
+                if(survivalLimit != 0 || platformMode != 0 || customBox)
+                    entry+="\t"+survivalLimit.ToString(CultureInfo.InvariantCulture);
+                if(platformMode != 0 || customBox)
+                    entry+="\t"+platformMode.ToString(CultureInfo.InvariantCulture);
+                if(customBox)
+                    entry+="\t"+boxWidth.ToString(CultureInfo.InvariantCulture)+
+                        "\t"+boxHeight.ToString(CultureInfo.InvariantCulture)+
+                        "\t"+offsetX.ToString("R",CultureInfo.InvariantCulture)+
+                        "\t"+offsetY.ToString("R",CultureInfo.InvariantCulture);
             }
             lines.Add(entry);
         }
@@ -835,6 +1234,18 @@ public static class CompiledAssemblyProbe
                 deadMessage.Length == 0 ? "-" : deadMessage,
                 lifeRegen.ToString(CultureInfo.InvariantCulture),
                 manaRegen.ToString(CultureInfo.InvariantCulture)));
+            string questFishName = Value<string>(player, "FishingQuestFishName") ?? "";
+            int catchRules = Convert.ToInt32(Value<object>(player, "FishingCatchRules"), CultureInfo.InvariantCulture);
+            if (questFishName.Length == 0 && catchRules != 0)
+                throw new InvalidOperationException("FishingCatchRules requires FishingQuestFishName: " + name);
+            if (questFishName.Length != 0)
+            {
+                CheckName(questFishName);
+                if (!questFishNames.Contains(questFishName) || (catchRules & ~3) != 0)
+                    throw new InvalidOperationException("FishingQuestFish must reference an owned quest BunnyItem: " + name);
+                lines.Add(string.Join("\t", "QUEST_CATCH", name, questFishName,
+                    catchRules.ToString(CultureInfo.InvariantCulture)));
+            }
         }
         foreach (object npc in npcs)
         {
@@ -865,6 +1276,14 @@ public static class CompiledAssemblyProbe
                 frames.ToString(CultureInfo.InvariantCulture)));
         }
 
+        foreach (Type rarity in rarityTypes)
+        {
+            string name = rarity.Name;
+            CheckName(name);
+            if (!names.Add("RARITY:" + name))
+                throw new InvalidOperationException("Duplicate BunnyRarity: " + name);
+            lines.Add("RARITY\t" + name);
+        }
         foreach (object prefix in prefixes)
         {
             Type type = prefix.GetType();
@@ -953,13 +1372,89 @@ public static class CompiledAssemblyProbe
             if(recipes.Count>16)throw new InvalidOperationException(type.FullName+": recipe capacity exceeded");
             lines.Add(string.Join("\t","RECIPES",type.Name,owner.Kind,string.Join(";",recipes)));
         }
+        foreach (object item in basicItems.Concat(weapons).Concat(potions).Concat(accessories))
+        {
+            string owner = item.GetType().Name;
+            string rarity = Value<string>(item, "ModRarityClassName");
+            if (rarity.Length == 0) continue;
+            CheckName(owner);
+            CheckName(rarity);
+            Type[] matches = rarityTypes.Where(t => t.Name == rarity).ToArray();
+            if (matches.Length != 1)
+                throw new InvalidOperationException("[CSharp][ERROR][RarityLoader] Class=" +
+                    owner + " API=SetRarity Stage=Compile Reason=RarityNotRegisteredInSameAssembly");
+            lines.Add("ITEM_RARITY\t" + owner + "\t" + rarity);
+        }
         foreach(var item in basicItems.Concat(weapons))
         {
+            int shootMask=Value<int>(item,"ShootCallbackMask");
+            // Mask zero installs native aim synchronization without invoking Mono callbacks.
+            string defaults=Value<string>(item,"NativeDefaultsDefinition");
+            bool nativeShot=defaults.Split(';').Any(field=>field.StartsWith("shoot:",StringComparison.Ordinal));
+            bool legacyShot=item.GetType().GetProperty("Shoot")?.GetValue(item) is string projectileName&&projectileName.Length!=0;
+            bool cursor=Value<bool>(item,"SpawnAtCursor");
+            if(shootMask!=0||nativeShot||legacyShot||cursor)lines.Add("SHOOT\t"+item.GetType().Name+"\t"+shootMask.ToString(CultureInfo.InvariantCulture)+(cursor?"\t1":""));
             object? sound=item.GetType().GetProperty("CustomUseSound")!.GetValue(item);
             if(sound!=null)lines.Add("USE_SOUND\t"+item.GetType().Name+"\t"+Value<string>(sound,"Definition"));
             object? holdout=item.GetType().GetProperty("Holdout")!.GetValue(item);
             if(holdout!=null)lines.Add(string.Join("\t","HOLDOUT",item.GetType().Name,
                 Value<float>(holdout,"X").ToString("R",CultureInfo.InvariantCulture),Value<float>(holdout,"Y").ToString("R",CultureInfo.InvariantCulture)));
+        }
+        // DamageType é identidade por classe, não um ID de runtime do compilador.
+        // O MonoVM resolve os IDs dos mods no próprio processo Android.
+        string DamageTypeWire(object content)
+        {
+            var damageClass = Value<BunnyLoader.Source.DamageClass>(content, "DamageType");
+            if (damageClass is null)
+                throw new InvalidOperationException("DamageType cannot be null: " + content.GetType().FullName);
+            return DamageClassWire(damageClass, content);
+        }
+        string DamageClassWire(BunnyLoader.Source.DamageClass damageClass, object content)
+        {
+            for (int i = 0; i < 10; ++i)
+                if (ReferenceEquals(damageClass, BunnyLoader.Source.DamageClassLoader.GetDamageClass(i)))
+                    return "V" + i.ToString(CultureInfo.InvariantCulture);
+            Type custom = damageClass.GetType();
+            if (custom.Assembly != content.GetType().Assembly ||
+                custom.IsAbstract || custom.ContainsGenericParameters ||
+                !typeof(BunnyLoader.Source.DamageClass).IsAssignableFrom(custom) ||
+                typeof(BunnyLoader.Source.VanillaDamageClass).IsAssignableFrom(custom) ||
+                custom.GetConstructor(Type.EmptyTypes) == null ||
+                custom.FullName is null ||
+                custom.FullName.Length > 240)
+                throw new InvalidOperationException("DamageType requires vanilla or concrete class from same assembly: " +
+                    content.GetType().FullName);
+            return "C:" + custom.FullName;
+        }
+        // V0 (DamageClass.Default) é o padrao e nao gera linha: o host trata a
+        // ausencia como V0, que ja nao altera as flags vanilla.
+        foreach (object owner in basicItems.Concat(weapons))
+        {
+            string wire = DamageTypeWire(owner);
+            if (wire != "V0") lines.Add(string.Join("\t", "DAMAGE_TYPE", "ITEM", owner.GetType().Name, wire));
+        }
+        foreach (object owner in projectiles)
+        {
+            string wire = DamageTypeWire(owner);
+            if (wire != "V0") lines.Add(string.Join("\t", "DAMAGE_TYPE", "PROJECTILE", owner.GetType().Name, wire));
+        }
+        // Bonus de classe enquanto equipado (StatModifier aditivo = 1 + Damage).
+        string Wire(float value) => value.ToString("R", CultureInfo.InvariantCulture);
+        foreach (object owner in basicItems)
+        {
+            var bonuses = owner.GetType().GetProperty("ClassBonuses")?.GetValue(owner) as System.Collections.IEnumerable;
+            if (bonuses is null) continue;
+            foreach (object bonus in bonuses)
+            {
+                var cls = Value<BunnyLoader.Source.DamageClass>(bonus, "Class");
+                if (cls is null)
+                    throw new InvalidOperationException("ClassBonus requires a DamageClass: " + owner.GetType().FullName);
+                lines.Add(string.Join("\t", "CLASS_BONUS", owner.GetType().Name, DamageClassWire(cls, owner),
+                    "0", Wire(1f + Value<float>(bonus, "Damage")), Wire(Value<float>(bonus, "DamageMultiplier")), "0",
+                    "0", Wire(1f + Value<float>(bonus, "Knockback")), Wire(Value<float>(bonus, "KnockbackMultiplier")), "0",
+                    Wire(Value<float>(bonus, "Crit")), Wire(Value<float>(bonus, "AttackSpeed")),
+                    Wire(Value<float>(bonus, "ArmorPenetration"))));
+            }
         }
         // A single public typed bridge serves all item families and projectiles.
         foreach(var definition in basicItems.Concat(weapons).Concat(potions).Concat(accessories)

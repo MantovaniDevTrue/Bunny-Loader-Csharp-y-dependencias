@@ -1,15 +1,34 @@
 #include "experiments/csharp/SourceLimits.h"
 #include "experiments/csharp/ContentTexture.h"
 #include "experiments/csharp/NativeContent.h"
+#include "experiments/csharp/WeaponSpeedContract.h"
+#include "experiments/csharp/WeaponSpeedContract.h"
 #include "experiments/csharp/ManagedRuntime.h"
 #include "experiments/csharp/ManagedProjectileHook.h"
 #include "experiments/csharp/ManagedMinionBuff.h"
+#include "experiments/csharp/NativeDamageClassHooks.h"
 #include "il2cpp/FieldContract.h"
 #include "il2cpp/GuardedCall.h"
 #include "experiments/csharp/NativeBasicItems.h"
+#include "experiments/csharp/NativeItemPolicies.h"
+#include "experiments/csharp/NativeCostumeDustDecision.h"
+#include "experiments/csharp/NativeMountRegistry.h"
 #include "experiments/csharp/NativeDefaults.h"
+#include "experiments/csharp/NativeDamageTypeRegistry.h"
+#include "experiments/csharp/NativeDamageClassFlags.h"
+#include "experiments/csharp/NativeDamageCombatProbe.h"
+#include "experiments/csharp/NativeDamagePlayerProjection.h"
 #include "experiments/csharp/NativeVisualRenderer.h"
 #include "experiments/csharp/NativeTileGameplay.h"
+#include "experiments/csharp/NativeTileFlags.h"
+#include "experiments/csharp/NativeTileAdjacencyPolicy.h"
+#include "experiments/csharp/NativeTilePolicy.h"
+#include "experiments/csharp/NativeSaplingGrowthPolicy.h"
+#include "experiments/csharp/NativeTileMiningPolicy.h"
+#include "experiments/csharp/NativeTreeTexturePolicy.h"
+#include "experiments/csharp/NativeGorePolicy.h"
+#include "experiments/csharp/ManagedGoreRuntime.h"
+#include "experiments/csharp/NativeManagedTablePublication.h"
 #include "experiments/csharp/NativeBootEffects.h"
 
 #include "content/common/GameRefs.h"
@@ -18,6 +37,9 @@
 #include "content/npcs/ModNpcs.h"
 #include "content/buffs/ModBuffs.h"
 #include "content/tiles/ModTiles.h"
+#include "content/tiles/ModTrees.h"
+#include "content/common/ContentAssets.h"
+#include "content/walls/ModWalls.h"
 #include "content/tiles/ModTileMap.h"
 #include "content/tiles/TileAccess.h"
 #include "il2cpp/Api.h"
@@ -42,6 +64,7 @@
 #include <cmath>
 #include <string>
 #include <sys/stat.h>
+#include <dlfcn.h>
 
 namespace bl::csharp {
 using il2cpp::nativeFieldContract;
@@ -75,6 +98,10 @@ struct NativeRefs {
     int projWidth = -1;
     int projHeight = -1;
     int itemAccessory = -1;
+    int itemMelee = -1;
+    int itemMagic = -1;
+    int projMelee = -1;
+    int projMagic = -1;
     int itemShieldSlot = -1;
     int itemShoeSlot = -1;
     int playerHellfireTreads = -1;
@@ -107,7 +134,24 @@ struct NativeRefs {
     int playerBuffTime = -1;
     int itemType = -1;
     int playerMoveSpeed = -1;
+    int playerMeleeDamage = -1;
+    int playerRangedDamage = -1;
+    int playerMagicDamage = -1;
+    int playerSummonDamage = -1;
+    int playerMeleeCrit = -1;
+    int playerRangedCrit = -1;
+    int playerMagicCrit = -1;
+    int playerMeleeSpeed = -1;
+    int playerArmorPenetration = -1;
+    int itemArmorPenetration = -1;
     int playerArmor = -1;
+    int playerTownNpcs = -1;
+    int playerJumpSpeedBoost = -1;
+    int playerExtraFall = -1;
+    int playerWet = -1;
+    int playerHead = -1;
+    int playerBody = -1;
+    int playerLegs = -1;
     int playerMaxRunSpeed = -1;
     int playerRunAcceleration = -1;
     int playerFrameShadow = -1;
@@ -191,6 +235,15 @@ struct NativeProjectileDefaults {
     float minionSlots = 0.f;
     bool tileCollide = true;
     bool ignoreWater = true;
+    int tileCollisionMode = 0;
+    float bounceRestitution = 1.f;
+    float bounceMinimumSpeed = 0.f;
+    int tileCollisionSurvivalLimit = 0;
+    int tilePlatformCollision = 0;
+    int tileCollisionBoxWidth = 0;
+    int tileCollisionBoxHeight = 0;
+    float tileCollisionAnchorOffsetX = 0.f;
+    float tileCollisionAnchorOffsetY = 0.f;
     int frames = 1;
     int animationFrameTicks=6,minionScanTicks=8;
     float minionTargetRange=700.f;
@@ -217,11 +270,28 @@ using SetArmorEffectVisualsFn = void (*)(Il2CppObject*, Il2CppObject*, const Met
 using PlayerSpawnFn = void (*)(Il2CppObject*, int32_t, const MethodInfo*);
 using PlayerUpdateFn = void (*)(Il2CppObject*, int32_t, const MethodInfo*);
 using PlayerStageFn = void (*)(Il2CppObject*, const MethodInfo*);
+using WeaponDamageFn = int32_t (*)(Il2CppObject*, Il2CppObject*, const MethodInfo*);
+using WeaponCritFn = int32_t (*)(Il2CppObject*, Il2CppObject*, const MethodInfo*);
+using WeaponKnockbackFn = float (*)(Il2CppObject*, Il2CppObject*, float, const MethodInfo*);
 using PlayerHurtFn = double (*)(Il2CppObject*, const void*, int32_t, int32_t,
                                uint8_t, uint8_t, uint8_t, int32_t, uint8_t,
                                const MethodInfo*);
 
 NativeRefs g_refs{};
+const MethodInfo* g_costumeAddBuff=nullptr;
+const MethodInfo* g_costumeNewDust=nullptr;
+int32_t g_costumeNormalDust=-1,g_costumeWetDust=-1;
+bool g_costumeReady=false,g_costumeParticlesReady=false;
+std::string g_costumeBindReason="NotResolved";
+std::array<uint32_t,256> g_costumeRandom{};
+
+struct CostumePlayerCycle {
+    Il2CppObject* player=nullptr;
+    int previousType=-1,currentType=-1;
+    bool power=false;
+};
+std::array<CostumePlayerCycle,256> g_costumeCycles{};
+
 FieldInfo* g_mainNpcArrayField = nullptr;
 FieldInfo* g_mainProjectileArrayField = nullptr;
 std::map<int, NativeWeaponDefaults> g_weapons;
@@ -237,6 +307,47 @@ std::shared_ptr<const ProjectileDefinitions> g_projectileView=std::make_shared<c
 std::shared_ptr<const std::map<int,NativeWeaponDefaults>> g_weaponView=std::make_shared<const std::map<int,NativeWeaponDefaults>>();
 void publishWeaponDefaults() {
     std::atomic_store_explicit(&g_weaponView,std::make_shared<const std::map<int,NativeWeaponDefaults>>(g_weapons),std::memory_order_release);
+}
+// Summon staves can create a stationary projectile at the cursor. Zero is a
+// valid initial velocity; AI owns subsequent movement. Keep the same contract
+// during registration and both managed-default application paths.
+bool validWeaponShootSpeed(float speed) {
+    return std::isfinite(speed) && speed >= 0.f && speed <= 40.f;
+}
+
+// Called after registerNativeContent has checked runtime, identity and texture.
+// Keep reservation and publication together so rejection never consumes an ID.
+int registerNativeWeapon(NativeRegisterContext& ctx, const NativeContentSpec& spec,
+                         const std::string& path, const std::string& display) {
+    auto reject = [&](const char* reason, const char* expected, const std::string& actual) {
+        ctx.lastError = "[CSharp][ERROR][Register] Mod=" + ctx.modId +
+            " Class=" + spec.name + " File=" + ctx.sourceFile +
+            " Stage=NativeWeapon Expected=" + expected + " Actual=" + actual +
+            " Result=Rejected Reason=" + reason;
+        BL_ERROR("%s", ctx.lastError.c_str());
+        return -1;
+    };
+    if (spec.damage < 1 || spec.damage > 1000)
+        return reject("WeaponDamageOutOfRange", "Damage:1..1000", std::to_string(spec.damage));
+    if (spec.useTime < 2 || spec.useTime > 120)
+        return reject("WeaponUseTimeOutOfRange", "UseTime:2..120", std::to_string(spec.useTime));
+    if (!validNativeWeaponShootSpeed(spec.shootSpeed, spec.summon))
+        return reject("WeaponShootSpeedOutOfRange", "FiniteShootSpeed:0..40", std::to_string(spec.shootSpeed));
+    if (!bl::runtime::modProjectileBelongsTo(spec.shootType, ctx.modId))
+        return reject("WeaponProjectileOwnershipMismatch", "ProjectileOwnedByMod", std::to_string(spec.shootType));
+    bl::runtime::ModItemDef def{};
+    def.mod = ctx.modId;
+    def.name = spec.name;
+    def.texture = path;
+    def.names = ctx.sourceNames;
+    def.names.push_back({"", display});
+    const int type = bl::runtime::registerModItem(std::move(def));
+    if (type < 0)
+        return reject("NativeItemReservationRejected", "NonNegativeContentId", std::to_string(type));
+    g_weapons[type] = {spec.damage, spec.useTime, spec.shootSpeed, spec.shootType};
+    publishWeaponDefaults();
+    ++ctx.items;
+    return type;
 }
 void publishProjectileDefinition(int type,const NativeProjectileDefaults& defaults,
                                  const std::string& key) {
@@ -288,6 +399,30 @@ PlayerStageFn g_originalUpdateDead = nullptr;
 PlayerStageFn g_originalLifeRegen = nullptr;
 PlayerStageFn g_originalManaRegen = nullptr;
 PlayerHurtFn g_originalPlayerHurt = nullptr;
+WeaponDamageFn g_originalWeaponDamage = nullptr;
+WeaponCritFn g_originalWeaponCrit = nullptr;
+WeaponKnockbackFn g_originalWeaponKnockback = nullptr;
+bool g_combatPlayerDamageFieldsReady = false;
+bool g_combatPlayerCritFieldsReady = false;
+bool g_combatPlayerMeleeSpeedFieldReady = false;
+bool g_combatArmorPenFieldsReady = false;
+std::atomic<int> g_damageCombatSamples{0};
+std::atomic<int> g_critCombatSamples{0};
+std::atomic<int> g_knockbackCombatSamples{0};
+std::atomic<int> g_combatResultSamples[3]{};
+
+// Resultado do combate de DamageClass (aplicado ou mantido), so para itens de
+// classe customizada e no maximo 6 por canal.
+void logNativeWeaponCombatResult(int channel, const char* stage, Il2CppObject* item,
+                                 double original, bool applied, double value) {
+    if (!item || g_refs.itemType < 0 || channel < 0 || channel > 2 ||
+        g_combatResultSamples[channel].load(std::memory_order_relaxed) >= 6) return;
+    const int itemType = bl::runtime::field<int32_t>(item, g_refs.itemType);
+    if (itemType < 0 || !nativeDamageTypes().isCustom(false, itemType)) return;
+    if (g_combatResultSamples[channel].fetch_add(1, std::memory_order_relaxed) >= 6) return;
+    BL_INFO("[CSharp][DamageClass][Combat] Stage=%s ItemType=%d Original=%.3f Final=%.3f Result=%s",
+            stage, itemType, original, applied ? value : original, applied ? "Applied" : "KeptVanilla");
+}
 constexpr int g_reviveSpawnContext = 0;
 bool g_ready = false;
 bool g_npcReady = false;
@@ -355,6 +490,149 @@ bool enableManagedPrefixEligibility(int type) {
     return true;
 }
 
+void observeNativeWeaponCombat(const char* channel, Il2CppObject* player,
+                               Il2CppObject* item, double nativeValue,
+                               std::atomic<int>& counter) {
+    if (!item || g_refs.itemType < 0 ||
+        counter.load(std::memory_order_relaxed) >= 6) return;
+    const int itemType = bl::runtime::field<int32_t>(item, g_refs.itemType);
+    if (itemType < 0 || !nativeDamageTypes().isCustom(false, itemType)) return;
+    NativeDamageCombatSample snapshot;
+    if (!resolveNativeDamageCombatSample(itemType, &snapshot)) return;
+    if (counter.fetch_add(1, std::memory_order_relaxed) >= 6) return;
+    const auto& stats = snapshot.defaults;
+    NativeVanillaPlayerDamage native;
+    float observedDelta = 0.f;
+    bool valid = false;
+    if (player && g_combatPlayerDamageFieldsReady) {
+        native.melee = bl::runtime::field<float>(player, g_refs.playerMeleeDamage);
+        native.ranged = bl::runtime::field<float>(player, g_refs.playerRangedDamage);
+        native.magic = bl::runtime::field<float>(player, g_refs.playerMagicDamage);
+        native.summon = bl::runtime::field<float>(player, g_refs.playerSummonDamage);
+        valid = projectNativeClassDamageDelta(stats, native, &observedDelta);
+    }
+    NativeVanillaPlayerCrit nativeCrit;
+    float sharedCrit = 0.f, inheritedCrit = 0.f, inheritedSpeed = 0.f;
+    bool validCrit = false, validSpeed = false;
+    if (player && g_combatPlayerCritFieldsReady) {
+        nativeCrit.melee = bl::runtime::field<int32_t>(player, g_refs.playerMeleeCrit);
+        nativeCrit.ranged = bl::runtime::field<int32_t>(player, g_refs.playerRangedCrit);
+        nativeCrit.magic = bl::runtime::field<int32_t>(player, g_refs.playerMagicCrit);
+        validCrit = projectNativeClassCritDelta(stats, nativeCrit,
+                                                 &sharedCrit, &inheritedCrit);
+    }
+    if (player && g_combatPlayerMeleeSpeedFieldReady)
+        validSpeed = projectNativeClassMeleeSpeedDelta(
+            stats, bl::runtime::field<float>(player, g_refs.playerMeleeSpeed),
+            &inheritedSpeed);
+    int32_t playerPenetration = 0, itemPenetration = 0;
+    float projectedPenetration = 0.f;
+    bool validPenetration = false;
+    if (player && g_combatArmorPenFieldsReady) {
+        playerPenetration = bl::runtime::field<int32_t>(
+            player, g_refs.playerArmorPenetration);
+        itemPenetration = bl::runtime::field<int32_t>(
+            item, g_refs.itemArmorPenetration);
+        validPenetration = projectNativeArmorPenetration(
+            stats, playerPenetration, itemPenetration, &projectedPenetration);
+    }
+    BL_INFO("[CSharp][DamageClass][Observe] Stage=%s Mod=%s ItemType=%d Class=%s Vanilla=%.3f DamageAdd=%.3f DamageMul=%.3f Crit=%.3f KnockbackAdd=%.3f KnockbackMul=%.3f Speed=%.3f ArmorPen=%.3f StandardCrit=%d LiveValid=%d Melee=%.3f Ranged=%.3f Magic=%.3f Summon=%.3f NonGenericDamageDelta=%.3f CritValid=%d SharedCrit=%.3f CritDelta=%.3f SpeedValid=%d MeleeSpeedDelta=%.3f PenValid=%d PlayerPen=%d ItemPen=%d ProjectedPen=%.3f Result=VanillaSample",
+        channel, snapshot.source.mod.c_str(), itemType,
+        snapshot.source.damageClass.c_str(), nativeValue,
+        stats.damage.additive, stats.damage.multiplicative, stats.crit,
+        stats.knockback.additive, stats.knockback.multiplicative,
+        stats.attackSpeed, stats.armorPenetration, stats.standardCrit ? 1 : 0,
+        valid ? 1 : 0, native.melee, native.ranged, native.magic,
+        native.summon, observedDelta, validCrit ? 1 : 0,
+        sharedCrit, inheritedCrit, validSpeed ? 1 : 0, inheritedSpeed,
+        validPenetration ? 1 : 0, playerPenetration, itemPenetration,
+        projectedPenetration);
+}
+
+int32_t hkNativeWeaponDamage(Il2CppObject* player, Il2CppObject* item,
+                             const MethodInfo* method) {
+    const int32_t original = g_originalWeaponDamage
+        ? g_originalWeaponDamage(player, item, method) : 0;
+    if (player) observeNativeWeaponCombat("GetWeaponDamage", player, item, original,
+                                          g_damageCombatSamples);
+    int32_t custom = 0;
+    const bool applied = player && damage_combat::customWeaponDamage(player, item, original, &custom);
+    if (player) logNativeWeaponCombatResult(0, "GetWeaponDamage", item, original, applied, custom);
+    return applied ? custom : original;
+}
+
+int32_t hkNativeWeaponCrit(Il2CppObject* player, Il2CppObject* item,
+                           const MethodInfo* method) {
+    const int32_t original = g_originalWeaponCrit
+        ? g_originalWeaponCrit(player, item, method) : 0;
+    if (player) observeNativeWeaponCombat("GetWeaponCrit", player, item, original,
+                                          g_critCombatSamples);
+    int32_t custom = 0;
+    const bool applied = player && damage_combat::customWeaponCrit(player, item, original, &custom);
+    if (player) logNativeWeaponCombatResult(1, "GetWeaponCrit", item, original, applied, custom);
+    return applied ? custom : original;
+}
+
+float hkNativeWeaponKnockback(Il2CppObject* player, Il2CppObject* item,
+                              float knockback, const MethodInfo* method) {
+    const float original = g_originalWeaponKnockback
+        ? g_originalWeaponKnockback(player, item, knockback, method) : knockback;
+    if (player) observeNativeWeaponCombat("GetWeaponKnockback", player, item, original,
+                                          g_knockbackCombatSamples);
+    float custom = 0.f;
+    const bool applied = player && damage_combat::customWeaponKnockback(player, item, knockback,
+            g_originalWeaponKnockback, method, &custom);
+    if (player) logNativeWeaponCombatResult(2, "GetWeaponKnockback", item, original, applied, custom);
+    return applied ? custom : original;
+}
+
+void installNativeDamageCombatObservation(Il2CppClass* player) {
+    using namespace bl::il2cpp;
+    if (!player || !api().method_is_instance) return;
+    const auto damage = findMethodBySignature(player, parseSignature(
+        "int GetWeaponDamage(Item sItem)"));
+    const auto crit = findMethodBySignature(player, parseSignature(
+        "int GetWeaponCrit(Item sItem)"));
+    const auto knockback = findMethodBySignature(player, parseSignature(
+        "float GetWeaponKnockback(Item sItem, float KnockBack)"));
+    if (damage && api().method_is_instance(damage) &&
+        bl::hook::install(damage, hkNativeWeaponDamage, &g_originalWeaponDamage))
+        BL_INFO("[CSharp][DamageClass] GetWeaponDamage passive native hook installed");
+    else BL_WARN("[CSharp][DamageClass] GetWeaponDamage passive hook unavailable");
+    if (crit && api().method_is_instance(crit) &&
+        bl::hook::install(crit, hkNativeWeaponCrit, &g_originalWeaponCrit))
+        BL_INFO("[CSharp][DamageClass] GetWeaponCrit passive native hook installed");
+    else BL_WARN("[CSharp][DamageClass] GetWeaponCrit passive hook unavailable");
+    if (knockback && api().method_is_instance(knockback) &&
+        bl::hook::install(knockback, hkNativeWeaponKnockback, &g_originalWeaponKnockback))
+        BL_INFO("[CSharp][DamageClass] GetWeaponKnockback passive native hook installed");
+    else BL_WARN("[CSharp][DamageClass] GetWeaponKnockback passive hook unavailable");
+    // Rastreio do genérico na origem, bonus de classe e velocidade de ataque.
+    damage_combat::installNativeDamageClassTracking();
+}
+
+bool g_nativeDamageClassFieldsReady=false;
+
+void applyNativeDamageClassFlags(Il2CppObject* object, bool projectile, int contentType) {
+    if (!object || !g_nativeDamageClassFieldsReady) return;
+    NativeDamageClassFlags flags;
+    if (!nativeDamageTypes().lookupFlags(projectile, contentType, &flags)) return;
+    if (!flags.resolved) return;
+    const auto& r=g_refs;
+    if (projectile) {
+        bl::runtime::field<uint8_t>(object,r.projMelee) = flags.melee;
+        bl::runtime::field<uint8_t>(object,r.projRanged) = flags.ranged;
+        bl::runtime::field<uint8_t>(object,r.projMagic) = flags.magic;
+        return;
+    }
+    const bool nativeSummon = bl::runtime::field<uint8_t>(object,r.itemSummon) != 0;
+    bl::runtime::field<uint8_t>(object,r.itemMelee) = flags.melee;
+    bl::runtime::field<uint8_t>(object,r.itemRanged) = flags.ranged;
+    bl::runtime::field<uint8_t>(object,r.itemMagic) = flags.magic;
+    bl::runtime::field<uint8_t>(object,r.itemSummon) =
+        flags.summon || (nativeSummon && !flags.melee && !flags.ranged && !flags.magic);
+}
+
 void hkItemDefaults(Il2CppObject* self, int32_t type, int32_t variant, const MethodInfo* method) {
     NativeDefaultsAfter nativeDefaults{self,false,type};
     if (self && isBasicItem(type)) {
@@ -364,6 +642,8 @@ void hkItemDefaults(Il2CppObject* self, int32_t type, int32_t variant, const Met
             return;
         }
         if (basicItemHasDamage(type)||basicItemIsAccessory(type)) enableManagedPrefixEligibility(type);
+        nativeDefaults.applyNow();
+        applyNativeDamageClassFlags(self,false,type);
         bl::runtime::finishModItem(self,type);
         return;
     }
@@ -425,6 +705,8 @@ void hkItemDefaults(Il2CppObject* self, int32_t type, int32_t variant, const Met
     bl::runtime::field<int32_t>(self, r.itemRare) = 2;
     bl::runtime::field<int32_t>(self, r.itemMaxStack) = 1;
     enableManagedPrefixEligibility(type);
+    nativeDefaults.applyNow();
+    applyNativeDamageClassFlags(self,false,type);
     bl::runtime::finishModItem(self, type);
 }
 
@@ -495,6 +777,7 @@ void hkNativeMinionDamage(Il2CppObject* projectile, const MethodInfo* method) {
 
 void hkProjectileDefaults(Il2CppObject* self, int32_t type, const MethodInfo* method) {
     notifyManagedSourceProjectileDefaults(self);
+    applyNativeStaticDefaults(true,type);
     if (g_originalProjectile) g_originalProjectile(self, type, method);
     const auto definitions=std::atomic_load_explicit(&g_projectileView,std::memory_order_acquire);
     auto it = definitions->find(type);
@@ -524,6 +807,7 @@ void hkProjectileDefaults(Il2CppObject* self, int32_t type, const MethodInfo* me
         }
     }
     applyNativeDefaults(self,true,type);
+    applyNativeDamageClassFlags(self,true,type);
     bl::runtime::finishModProjectile(self, type);
 }
 
@@ -592,6 +876,50 @@ void applyNativeBootVisuals(Il2CppObject* self, int32_t slot,
         BL_INFO("csharp boots: rotina nativa tile=%d,%d chama=%d", x, y, placed);
 }
 
+
+CostumePlayerCycle* costumeCycle(Il2CppObject* player) {
+    if(!g_costumeReady||!player||g_refs.playerWhoAmI<0)return nullptr;
+    const int index=bl::runtime::field<int32_t>(player,g_refs.playerWhoAmI);
+    if(index<0||index>=static_cast<int>(g_costumeCycles.size()))return nullptr;
+    auto& cycle=g_costumeCycles[static_cast<size_t>(index)];
+    if(cycle.player!=player)cycle={player,-1,-1,false};
+    return &cycle;
+}
+bool costumeEquipped(Il2CppObject* player,int type,bool vanity) {
+    if(!player||type<0||g_refs.playerArmor<0||g_refs.itemType<0)return false;
+    auto* armor=bl::runtime::field<Il2CppArray*>(player,g_refs.playerArmor);
+    if(!bl::il2cpp::nativeManagedPointerPlausible(armor)||
+       !bl::il2cpp::nativeManagedPointerPlausible(armor->obj.klass)||
+       armor->length<10||armor->length>40)return false;
+    auto** items=static_cast<Il2CppObject**>(arrayData(armor));
+    const uintptr_t begin=vanity?13u:3u,end=std::min<uintptr_t>(begin+7u,armor->length);
+    for(uintptr_t slot=begin;slot<end;++slot) {
+        auto* item=items[slot];
+        if(item&&bl::runtime::field<int32_t>(item,g_refs.itemType)==type)return true;
+    }
+    return false;
+}
+bool costumeHidden(Il2CppObject* player,int type) {
+    if(g_refs.playerArmor<0||g_refs.playerHideVisibleAccessory<0)return true;
+    auto* armor=bl::runtime::field<Il2CppArray*>(player,g_refs.playerArmor);
+    auto* hidden=bl::runtime::field<Il2CppArray*>(player,g_refs.playerHideVisibleAccessory);
+    if(!bl::il2cpp::nativeManagedPointerPlausible(armor)||
+       !bl::il2cpp::nativeManagedPointerPlausible(armor->obj.klass)||
+       armor->length<10||armor->length>40||
+       !nativeArrayContract(hidden,"Boolean",1,60))return true;
+    auto** items=static_cast<Il2CppObject**>(arrayData(armor));
+    auto* flags=static_cast<uint8_t*>(arrayData(hidden));
+    for(uintptr_t slot=3;slot<10;++slot)
+        if(items[slot]&&bl::runtime::field<int32_t>(items[slot],g_refs.itemType)==type)
+            return slot<hidden->length&&flags[slot]!=0;
+    return true;
+}
+int costumeTownCount(Il2CppObject* player) {
+    if(!player||g_refs.playerTownNpcs<0)return 0;
+    const int32_t count=bl::runtime::field<int32_t>(player,g_refs.playerTownNpcs);
+    return count>0?count:0;
+}
+
 void hkApplyEquip(Il2CppObject* self, int32_t slot, Il2CppObject* item, const MethodInfo* method) {
     // Itens salvos nasceram antes do registro de texturas. Atualize ANTES
     // de o Terraria selecionar shield/shoe para o desenho deste tick.
@@ -599,6 +927,19 @@ void hkApplyEquip(Il2CppObject* self, int32_t slot, Il2CppObject* item, const Me
     if (g_originalEquip) g_originalEquip(self, slot, item, method);
     if (!self || !item) return;
     const int type = bl::runtime::field<int32_t>(item, g_refs.itemType);
+    NativeCostumeEffect costume;
+    if(nativeCostumesActive()&&nativeCostumeEffect(type,&costume)) {
+        if(auto* cycle=costumeCycle(self))cycle->currentType=type;
+        if(costumeTownCount(self)>=costume.requiredTownNpcs&&g_costumeAddBuff) {
+            int32_t duration=60,buff=costume.buffType;uint8_t fromNetPvP=1;
+            void* args[]={&buff,&duration,&fromNetPvP};
+            Il2CppObject* error=nullptr;
+            il2cpp::api().runtime_invoke(g_costumeAddBuff,self,args,&error);
+            if(error){static unsigned failures=0;if(failures++<3)
+                BL_ERROR("[CSharp][Costume] Stage=UpdateEquips Result=AddBuffFailed Detail=%s",
+                    il2cpp::describeException(error).c_str());}
+        }
+    }
     const auto it = g_accessories.find(type);
     if (it == g_accessories.end()) return;
     auto& defense = bl::runtime::field<int32_t>(self, g_refs.playerStatDefense);
@@ -696,6 +1037,31 @@ void hkSetArmorEffectVisuals(Il2CppObject* self, Il2CppObject* drawPlayer,
         static int visualLogs = 0;
         if (visualLogs++ < 3)
             BL_INFO("csharp BunnyPlayer FrameEffects: sombra de desenho e contorno ativos");
+    }
+    if(g_costumeReady&&nativeCostumesActive()&&g_refs.playerArmor>=0&&g_refs.itemType>=0) {
+        auto* cycle=costumeCycle(actor);
+        auto* armor=bl::runtime::field<Il2CppArray*>(actor,g_refs.playerArmor);
+        if(cycle&&bl::il2cpp::nativeManagedPointerPlausible(armor)&&
+           bl::il2cpp::nativeManagedPointerPlausible(armor->obj.klass)&&
+           armor->length>=20&&armor->length<=40) {
+            auto** items=static_cast<Il2CppObject**>(arrayData(armor));
+            for(uintptr_t slot=3;slot<20;++slot) {
+                if(slot>=10&&slot<13)continue;
+                auto* item=items[slot];
+                if(!item)continue;
+                NativeCostumeEffect effect;
+                const int type=bl::runtime::field<int32_t>(item,g_refs.itemType);
+                if(!nativeCostumeEffect(type,&effect))continue;
+                const bool forced=costumeEquipped(actor,type,true);
+                if(!costume_dust::visible(forced,cycle->power,costumeHidden(actor,type)))continue;
+                const bool wet=bl::runtime::field<uint8_t>(actor,g_refs.playerWet)!=0;
+                const int* slots=wet?effect.alternate:effect.normal;
+                bl::runtime::field<int32_t>(actor,g_refs.playerHead)=slots[0];
+                bl::runtime::field<int32_t>(actor,g_refs.playerBody)=slots[1];
+                bl::runtime::field<int32_t>(actor,g_refs.playerLegs)=slots[2];
+                break;
+            }
+        }
     }
     if (g_refs.playerWhoAmI < 0 || g_refs.playerArmor < 0 || g_refs.itemType < 0)
         return;
@@ -803,7 +1169,95 @@ void hkPlayerSpawn(Il2CppObject* self, int32_t context, const MethodInfo* method
     BL_INFO("csharp BunnyPlayer OnRespawn: %d mensagem(ns) enviadas(s)", count);
 }
 
+int32_t costumeDustId(const char* name) {
+    const int32_t metadataId=!std::strcmp(name,"GoldFlame")?228:
+        !std::strcmp(name,"BlueFlare")?187:-1;
+    auto& a=bl::il2cpp::api();
+    auto* cls=bl::il2cpp::findClass({"Terraria.ID","DustID",{}});
+    auto* f=cls?bl::il2cpp::findField(cls,name):nullptr;
+    if(!f||!a.field_get_flags||!a.field_get_type||!a.class_from_il2cpp_type||
+       !a.class_get_namespace||!a.class_get_name)return metadataId;
+    auto* type=a.class_from_il2cpp_type(a.field_get_type(f));
+    const char* ns=type?a.class_get_namespace(type):nullptr;
+    const char* n=type?a.class_get_name(type):nullptr;
+    if(!ns||!n||std::strcmp(ns,"System"))return metadataId;
+    const bool small=!std::strcmp(n,"Int16");
+    if(!small&&std::strcmp(n,"Int32"))return metadataId;
+    int32_t id=-1;
+    if(a.field_get_flags(f)&0x40u) {
+        using DefaultFn=const void* (*)(const FieldInfo*,const Il2CppType**);
+        auto* fn=reinterpret_cast<DefaultFn>(dlsym(RTLD_DEFAULT,"il2cpp_field_get_default_value"));
+        const Il2CppType* valueType=nullptr;
+        const void* data=fn?fn(f,&valueType):nullptr;
+        if(!data)return metadataId;
+        if(small){int16_t v=-1;std::memcpy(&v,data,2);id=v;}
+        else std::memcpy(&id,data,4);
+    } else if((a.field_get_flags(f)&0x10u)&&a.field_static_get_value) {
+        if(small){int16_t v=-1;a.field_static_get_value(f,&v);id=v;}
+        else a.field_static_get_value(f,&id);
+    }
+    return id>0&&id<2000?id:metadataId;
+}
+void spawnCostumeDust(Il2CppObject* player) {
+    if(!player||!g_costumeParticlesReady||!nativeCostumesActive()||
+       (g_refs.playerDead>=0&&bl::runtime::field<uint8_t>(player,g_refs.playerDead)))
+        return;
+    auto* cycle=costumeCycle(player);
+    if(!cycle)return;
+    int type=cycle->currentType;
+    NativeCostumeEffect effect;
+    if(type<0||!nativeCostumeEffect(type,&effect)) {
+        type=-1;
+        auto* armor=bl::runtime::field<Il2CppArray*>(player,g_refs.playerArmor);
+        if(!bl::il2cpp::nativeManagedPointerPlausible(armor)||
+           !bl::il2cpp::nativeManagedPointerPlausible(armor->obj.klass)||
+           armor->length<20||armor->length>40)return;
+        auto** items=static_cast<Il2CppObject**>(arrayData(armor));
+        for(uintptr_t i=13;i<20;++i) {
+            if(!items[i])continue;
+            const int candidate=bl::runtime::field<int32_t>(items[i],g_refs.itemType);
+            if(nativeCostumeEffect(candidate,&effect)){type=candidate;break;}
+        }
+        if(type<0)return;
+    }
+    if(!costume_dust::visible(costumeEquipped(player,type,true),cycle->power,costumeHidden(player,type)))
+        return;
+    const int index=bl::runtime::field<int32_t>(player,g_refs.playerWhoAmI);
+    if(index<0||index>=static_cast<int>(g_costumeRandom.size()))return;
+    auto& random=g_costumeRandom[static_cast<size_t>(index)];
+    if(!costume_dust::sample(random,index))return;
+    const int32_t dust=costume_dust::dustId(
+        bl::runtime::field<uint8_t>(player,g_refs.playerWet)!=0,
+        g_costumeNormalDust,g_costumeWetDust);
+    const int32_t width=bl::runtime::field<int32_t>(player,g_refs.playerWidth);
+    const int32_t height=bl::runtime::field<int32_t>(player,g_refs.playerHeight);
+    if(width<1||width>128||height<1||height>128)return;
+    struct Vec {float x,y;};
+    const Vec position=bl::runtime::field<Vec>(player,g_refs.playerPosition);
+    if(!std::isfinite(position.x)||!std::isfinite(position.y))return;
+    const float speed=0.f,scale=1.f;
+    const int32_t alpha=0;
+    const uint32_t color=0xffffffffu;
+    void* args[]={const_cast<Vec*>(&position),const_cast<int32_t*>(&width),
+        const_cast<int32_t*>(&height),const_cast<int32_t*>(&dust),
+        const_cast<float*>(&speed),const_cast<float*>(&speed),
+        const_cast<int32_t*>(&alpha),const_cast<uint32_t*>(&color),
+        const_cast<float*>(&scale)};
+    Il2CppObject* error=nullptr;
+    bl::il2cpp::api().runtime_invoke(g_costumeNewDust,nullptr,args,&error);
+    if(error){static unsigned failures=0;if(failures++<3)
+        BL_ERROR("[CSharp][Costume] Stage=Dust.NewDust Result=Failed Detail=%s",
+            bl::il2cpp::describeException(error).c_str());}
+}
+
 void hkPlayerUpdate(Il2CppObject* self, int32_t index, const MethodInfo* method) {
+    if(nativeCostumesActive()) {
+        if(auto* cycle=costumeCycle(self)) {
+            cycle->previousType=cycle->currentType;
+            cycle->currentType=-1;
+            cycle->power=false;
+        }
+    }
     static bool loggedPre = false;
     static bool loggedPost = false;
     if (self && g_playerPoliciesReady && g_preUpdateEnabled && !loggedPre) {
@@ -812,6 +1266,7 @@ void hkPlayerUpdate(Il2CppObject* self, int32_t index, const MethodInfo* method)
     }
     if (g_originalPlayerUpdate)
         g_originalPlayerUpdate(self, index, method);
+    spawnCostumeDust(self);
     if (self && self == g_dodgePendingPlayer && g_refs.playerLife >= 0) {
         if (g_dodgeLifeSamples < 12) {
             ++g_dodgeLifeSamples;
@@ -1264,6 +1719,7 @@ void hkBuffEquipment(Il2CppObject* self,int32_t playerIndex,const MethodInfo* me
 void hkUpdateBuffs(Il2CppObject* self, int32_t playerIndex, const MethodInfo* method) {
     if (g_originalUpdateBuffs) g_originalUpdateBuffs(self, playerIndex, method);
     if (!self) return;
+    updateNativeMountBuffs(self);
     const auto buffs=std::atomic_load_explicit(&g_buffView,std::memory_order_acquire);
     if(buffs->empty())return;
     auto* types=bl::runtime::field<Il2CppArray*>(self,g_refs.playerBuffType);
@@ -1290,9 +1746,36 @@ void hkUpdateBuffs(Il2CppObject* self, int32_t playerIndex, const MethodInfo* me
         case MinionBuffAction::Keep:break;
         }
     });
+    if(g_costumeReady&&nativeCostumesActive()) {
+        auto* cycle=costumeCycle(self);
+        if(cycle&&cycle->previousType>=0) {
+            NativeCostumeEffect costume;
+            if(nativeCostumeEffect(cycle->previousType,&costume)) {
+                const bool enabled=costumeTownCount(self)>=costume.requiredTownNpcs;
+                visitManagedBuffSlots(typeValues,timeValues,count,[&](size_t slot) {
+                    if(typeValues[slot]!=costume.buffType)return;
+                    if(enabled) {
+                        bl::runtime::field<float>(self,g_refs.playerJumpSpeedBoost)+=costume.jumpSpeedBoost;
+                        bl::runtime::field<int32_t>(self,g_refs.playerExtraFall)+=costume.extraFall;
+                        cycle->power=true;
+                    } else if(g_removeMinionBuff) {
+                        int32_t index=static_cast<int32_t>(slot);
+                        void* args[]={&index};Il2CppObject* error=nullptr;
+                        il2cpp::api().runtime_invoke(g_removeMinionBuff,self,args,&error);
+                        if(error){static unsigned failures=0;if(failures++<3)
+                            BL_ERROR("[CSharp][Costume] Stage=DelBuff Result=Failed Detail=%s",
+                                il2cpp::describeException(error).c_str());}
+                    }
+                });
+            }
+        }
+    }
 }
 
 }
+
+bool nativeCostumeRuntimeReady() {return g_costumeReady;}
+const char* nativeCostumeRuntimeDiagnostic() {return g_costumeBindReason.c_str();}
 
 std::string nativeManagedProjectileKey(int type) {
     const auto view=std::atomic_load_explicit(&g_projectileView,std::memory_order_acquire);
@@ -1312,6 +1795,18 @@ bool nativeManagedProjectileFields(int type,ProjectileGameplayFields* fields) {
     const auto view=std::atomic_load_explicit(&g_projectileView,std::memory_order_acquire);
     const auto found=view->find(type);if(found==view->end())return false;
     *fields=found->second.fields;return true;
+}
+
+ManagedTileCollisionSettings nativeManagedProjectileTileCollisionSettings(int type) {
+    const auto view=std::atomic_load_explicit(&g_projectileView,std::memory_order_acquire);
+    const auto found=view->find(type);
+    if(found==view->end())return {};
+    const auto& defaults=found->second.defaults;
+    return {defaults.tileCollisionMode,defaults.bounceRestitution,
+            defaults.bounceMinimumSpeed,defaults.tileCollisionSurvivalLimit,
+            defaults.tilePlatformCollision,
+            defaults.tileCollisionBoxWidth,defaults.tileCollisionBoxHeight,
+            defaults.tileCollisionAnchorOffsetX,defaults.tileCollisionAnchorOffsetY};
 }
 int nativeManagedProjectileFrames(int type) {return nativeManagedProjectilePolicy(type).frames;}
 
@@ -1369,6 +1864,18 @@ bool prepareNativeContent() {
     r.projWidth = fieldOffset(projectile, "width");
     r.projHeight = fieldOffset(projectile, "height");
     r.itemAccessory = fieldOffset(item, "accessory");
+    std::string damageFlagsError;
+    g_nativeDamageClassFieldsReady =
+        nativeFieldContract(item,"melee","System.Boolean",false,1,nullptr,&r.itemMelee,&damageFlagsError) &&
+        nativeFieldContract(item,"ranged","System.Boolean",false,1,nullptr,&r.itemRanged,&damageFlagsError) &&
+        nativeFieldContract(item,"magic","System.Boolean",false,1,nullptr,&r.itemMagic,&damageFlagsError) &&
+        nativeFieldContract(item,"summon","System.Boolean",false,1,nullptr,&r.itemSummon,&damageFlagsError) &&
+        nativeFieldContract(projectile,"melee","System.Boolean",false,1,nullptr,&r.projMelee,&damageFlagsError) &&
+        nativeFieldContract(projectile,"ranged","System.Boolean",false,1,nullptr,&r.projRanged,&damageFlagsError) &&
+        nativeFieldContract(projectile,"magic","System.Boolean",false,1,nullptr,&r.projMagic,&damageFlagsError);
+    if (!g_nativeDamageClassFieldsReady)
+        BL_WARN("[CSharp][DamageClass] Stage=BindNativeFlags Result=LegacyDefaultsUntilCompatible Detail=%s",
+                damageFlagsError.c_str());
     r.itemShieldSlot = fieldOffset(item, "shieldSlot");
     r.itemShoeSlot = fieldOffset(item, "shoeSlot");
     r.playerHellfireTreads = fieldOffset(player, "hellfireTreads");
@@ -1399,6 +1906,46 @@ bool prepareNativeContent() {
     r.projectileOwner = fieldOffset(projectile, "owner");
     r.playerStatDefense = fieldOffset(player, "statDefense");
     r.playerMoveSpeed = fieldOffset(player, "moveSpeed");
+    std::string nativeDamageError;
+    g_combatPlayerDamageFieldsReady =
+        nativeFieldContract(player, "meleeDamage", "System.Single", false, 4,
+                            nullptr, &r.playerMeleeDamage, &nativeDamageError) &&
+        nativeFieldContract(player, "rangedDamage", "System.Single", false, 4,
+                            nullptr, &r.playerRangedDamage, &nativeDamageError) &&
+        nativeFieldContract(player, "magicDamage", "System.Single", false, 4,
+                            nullptr, &r.playerMagicDamage, &nativeDamageError) &&
+        nativeFieldContract(player, "minionDamage", "System.Single", false, 4,
+                            nullptr, &r.playerSummonDamage, &nativeDamageError);
+    if (!g_combatPlayerDamageFieldsReady)
+        BL_WARN("[CSharp][DamageClass] Stage=BindPlayerDamage Result=PassiveNoLiveStats Detail=%s",
+                nativeDamageError.c_str());
+    std::string nativeCritError;
+    g_combatPlayerCritFieldsReady =
+        nativeFieldContract(player, "meleeCrit", "System.Int32", false, 4,
+                            nullptr, &r.playerMeleeCrit, &nativeCritError) &&
+        nativeFieldContract(player, "rangedCrit", "System.Int32", false, 4,
+                            nullptr, &r.playerRangedCrit, &nativeCritError) &&
+        nativeFieldContract(player, "magicCrit", "System.Int32", false, 4,
+                            nullptr, &r.playerMagicCrit, &nativeCritError);
+    if (!g_combatPlayerCritFieldsReady)
+        BL_WARN("[CSharp][DamageClass] Stage=BindPlayerCrit Result=PassiveNoLiveStats Detail=%s",
+                nativeCritError.c_str());
+    std::string nativeSpeedError;
+    g_combatPlayerMeleeSpeedFieldReady =
+        nativeFieldContract(player, "meleeSpeed", "System.Single", false, 4,
+                            nullptr, &r.playerMeleeSpeed, &nativeSpeedError);
+    if (!g_combatPlayerMeleeSpeedFieldReady)
+        BL_WARN("[CSharp][DamageClass] Stage=BindPlayerSpeed Result=PassiveNoLiveStats Detail=%s",
+                nativeSpeedError.c_str());
+    std::string nativePenError;
+    g_combatArmorPenFieldsReady =
+        nativeFieldContract(player, "armorPenetration", "System.Int32", false, 4,
+                            nullptr, &r.playerArmorPenetration, &nativePenError) &&
+        nativeFieldContract(item, "armorPenetration", "System.Int32", false, 4,
+                            nullptr, &r.itemArmorPenetration, &nativePenError);
+    if (!g_combatArmorPenFieldsReady)
+        BL_WARN("[CSharp][DamageClass] Stage=BindArmorPen Result=PassiveNoLiveStats Detail=%s",
+                nativePenError.c_str());
     r.playerArmor = fieldOffset(player, "armor");
     r.playerMaxRunSpeed = fieldOffset(player, "maxRunSpeed");
     r.playerRunAcceleration = fieldOffset(player, "runAcceleration");
@@ -1470,6 +2017,7 @@ bool prepareNativeContent() {
     if (!g_originalProjectileDamage&&!bl::hook::install(damageMethod, hkNativeMinionDamage, &g_originalProjectileDamage))
         return false;
 
+    installNativeDamageCombatObservation(player);
     g_ready = true;
     BL_INFO("csharp native content: hooks C++ de item e projetil instalados");
     return true;
@@ -1527,6 +2075,67 @@ bool prepareNativePlayerEffects() {
     const MethodInfo* armorVisuals = findMethodBySignature(
         player, parseSignature("void SetArmorEffectVisuals(Player drawPlayer)"));
     if (!equip || !buffs || !runSpeeds || !armorVisuals) return false;
+
+    std::string costumeFieldError;
+    const auto costumeField=[&](const char* name,const char* type,size_t size,int* offset) {
+        std::string detail;
+        const bool ready=nativeFieldContract(player,name,type,false,size,nullptr,offset,&detail);
+        if(!ready&&costumeFieldError.empty())costumeFieldError=detail;
+        return ready;
+    };
+    g_costumeAddBuff=findMethodBySignature(
+        player,parseSignature("void AddBuff(int type, int time, bool fromNetPvP)"));
+    const bool addBuffReady=g_costumeAddBuff&&api().method_is_instance&&
+        api().method_is_instance(g_costumeAddBuff);
+    const bool removeBuffReady=g_removeMinionBuff&&api().runtime_invoke;
+    const bool hideReady=g_refs.playerHideVisibleAccessory>=0;
+    const bool identityReady=g_refs.playerWhoAmI>=0;
+    bool fieldsReady=true;
+    fieldsReady=costumeField("townNPCs","System.Int32",4,&g_refs.playerTownNpcs)&&fieldsReady;
+    fieldsReady=costumeField("jumpSpeedBoost","System.Single",4,&g_refs.playerJumpSpeedBoost)&&fieldsReady;
+    fieldsReady=costumeField("extraFall","System.Int32",4,&g_refs.playerExtraFall)&&fieldsReady;
+    fieldsReady=costumeField("wet","System.Boolean",1,&g_refs.playerWet)&&fieldsReady;
+    fieldsReady=costumeField("head","System.Int32",4,&g_refs.playerHead)&&fieldsReady;
+    fieldsReady=costumeField("body","System.Int32",4,&g_refs.playerBody)&&fieldsReady;
+    fieldsReady=costumeField("legs","System.Int32",4,&g_refs.playerLegs)&&fieldsReady;
+    g_costumeReady=addBuffReady&&removeBuffReady&&hideReady&&identityReady&&fieldsReady;
+    g_costumeBindReason=g_costumeReady?"Ready":
+        !addBuffReady?"AddBuffMethodMissingOrSignatureMismatch":
+        !removeBuffReady?"DelBuffMethodMissingOrRuntimeInvokeUnavailable":
+        !hideReady?"HideVisibleAccessoryFieldMissing":
+        !identityReady?"PlayerWhoAmIFieldMissing":costumeFieldError;
+    if(!g_costumeReady)
+        BL_WARN("[CSharp][Costume] Stage=BindPlayerHooks Result=Pending Reason=%s",
+                g_costumeBindReason.c_str());
+    if(g_costumeReady) {
+        auto* dust=il2cpp::findClass({"Terraria","Dust",{}});
+        g_costumeNewDust=dust?findMethodBySignature(dust,parseSignature(
+            "int NewDust(Vector2 Position, int Width, int Height, int Type, float SpeedX, float SpeedY, int Alpha, Color newColor, float Scale)")):nullptr;
+        const auto check=[&](const char* name,const char* type,size_t size,int* offset) {
+            std::string error;
+            return nativeFieldContract(player,name,type,false,size,nullptr,offset,&error);
+        };
+        g_costumeNormalDust=costumeDustId("GoldFlame");
+        g_costumeWetDust=costumeDustId("BlueFlare");
+        g_costumeParticlesReady=g_costumeNewDust&&api().method_is_instance&&
+            !api().method_is_instance(g_costumeNewDust)&&api().runtime_invoke&&
+            g_costumeNormalDust>0&&g_costumeWetDust>0&&
+            check("position","Microsoft.Xna.Framework.Vector2",8,&g_refs.playerPosition)&&
+            check("width","System.Int32",4,&g_refs.playerWidth)&&
+            check("height","System.Int32",4,&g_refs.playerHeight);
+        if(!g_costumeParticlesReady) {
+            const char* reason=!g_costumeNewDust?"NewDustMethodUnavailable":
+                !api().method_is_instance?"MethodInstanceContractUnavailable":
+                api().method_is_instance(g_costumeNewDust)?"NewDustUnexpectedInstanceMethod":
+                !api().runtime_invoke?"RuntimeInvokeUnavailable":
+                g_costumeNormalDust<=0?"GoldFlameDustIdUnavailable":
+                g_costumeWetDust<=0?"BlueFlareDustIdUnavailable":
+                g_refs.playerPosition<0?"PlayerPositionUnavailable":
+                g_refs.playerWidth<0?"PlayerWidthUnavailable":
+                g_refs.playerHeight<0?"PlayerHeightUnavailable":"ParticleFieldContractUnavailable";
+            BL_WARN("[CSharp][Costume] Stage=BindParticles Result=Unavailable Reason=%s",reason);
+        }
+    }
     if (!bl::hook::install(equip, hkApplyEquip, &g_originalEquip)) return false;
     const MethodInfo* vanity = findMethodBySignature(
         player, parseSignature("void ApplyEquipVanity(int itemSlot, Item currentItem)"));
@@ -1657,8 +2266,7 @@ bool applyManagedNativeDefaults(
         !projectile.friendly ||
         weapon.damage < 1 || weapon.damage > 1000 ||
         weapon.useTime < 2 || weapon.useTime > 120 ||
-        !std::isfinite(weapon.shootSpeed) ||
-        weapon.shootSpeed < 1.f || weapon.shootSpeed > 40.f)
+        !validWeaponShootSpeed(weapon.shootSpeed))
         return false;
 
     g_projectiles[projectileType] = {
@@ -1721,12 +2329,40 @@ bool applyManagedNativeDefaultsBatch(
             (!data.minion && data.minionSlots != 0.f) ||
             (data.movement.enabled&&(!data.minion||data.aiStyle!=0)) ||
             (data.minionContactDamage && (!data.minion || !g_originalProjectileDamage)) ||
+            data.tileCollisionMode < 0 || data.tileCollisionMode > 3 ||
+            (data.tileCollisionMode != 0 && !data.tileCollide) ||
+            !std::isfinite(data.bounceRestitution) ||
+            data.bounceRestitution < 0.f || data.bounceRestitution > 2.f ||
+            !std::isfinite(data.bounceMinimumSpeed) ||
+            data.bounceMinimumSpeed < 0.f || data.bounceMinimumSpeed > 64.f ||
+            (data.tileCollisionMode != 2 &&
+             (data.bounceRestitution != 1.f || data.bounceMinimumSpeed != 0.f)) ||
+            data.tileCollisionSurvivalLimit < 0 || data.tileCollisionSurvivalLimit > 64 ||
+            (data.tileCollisionMode == 0 && data.tileCollisionSurvivalLimit != 0) ||
+            data.tilePlatformCollision < 0 || data.tilePlatformCollision > 2 ||
+            (data.tilePlatformCollision != 0 && !data.tileCollide) ||
+            data.tileCollisionBoxWidth < 0 || data.tileCollisionBoxWidth > 512 ||
+            data.tileCollisionBoxHeight < 0 || data.tileCollisionBoxHeight > 512 ||
+            !std::isfinite(data.tileCollisionAnchorOffsetX) ||
+            !std::isfinite(data.tileCollisionAnchorOffsetY) ||
+            data.tileCollisionAnchorOffsetX < -256.f ||
+            data.tileCollisionAnchorOffsetX > 256.f ||
+            data.tileCollisionAnchorOffsetY < -256.f ||
+            data.tileCollisionAnchorOffsetY > 256.f ||
+            (!data.tileCollide && (data.tileCollisionBoxWidth != 0 ||
+              data.tileCollisionBoxHeight != 0 ||
+              data.tileCollisionAnchorOffsetX != 0.f ||
+              data.tileCollisionAnchorOffsetY != 0.f)) ||
             data.frames < 1 || data.frames > 32 ||
             !stagedProjectiles.emplace(entry.type, NativeProjectileDefaults{
                 data.width, data.height, data.aiStyle, data.penetrate,
                 data.timeLeft, true, false,
                 data.minion, data.minionContactDamage, data.minionSlots,
-                data.tileCollide, data.ignoreWater,
+                data.tileCollide, data.ignoreWater, data.tileCollisionMode,
+                data.bounceRestitution, data.bounceMinimumSpeed,
+                data.tileCollisionSurvivalLimit,data.tilePlatformCollision,
+                data.tileCollisionBoxWidth,data.tileCollisionBoxHeight,
+                data.tileCollisionAnchorOffsetX,data.tileCollisionAnchorOffsetY,
                 data.frames,data.animationFrameTicks,data.minionScanTicks,data.minionTargetRange}).second ||
             data.width < 1 || data.width > 512 ||
             data.height < 1 || data.height > 512 ||
@@ -1759,10 +2395,28 @@ bool applyManagedNativeDefaultsBatch(
                 entry.summon, entry.minionBuffType, entry.minionBuffTime}).second ||
             data.damage < 1 || data.damage > 1000 ||
             data.useTime < 2 || data.useTime > 120 ||
-            !std::isfinite(data.shootSpeed) ||
-            data.shootSpeed < 1.f || data.shootSpeed > 40.f)
+            !validNativeWeaponShootSpeed(data.shootSpeed, entry.summon))
             return false;
     }
+    const bool needsTileCollisionHook = std::any_of(projectiles.begin(),projectiles.end(),
+        [](const ManagedProjectileEntry& entry) {
+            const auto& v=entry.values;
+            return v.tileCollisionMode != 0 || v.tilePlatformCollision != 0 ||
+                v.tileCollisionBoxWidth != 0 || v.tileCollisionBoxHeight != 0 ||
+                v.tileCollisionAnchorOffsetX != 0.f || v.tileCollisionAnchorOffsetY != 0.f;
+        });
+    std::string tileCollisionError;
+    const bool needsPlatformPolicy = std::any_of(projectiles.begin(),projectiles.end(),
+        [](const ManagedProjectileEntry& entry) {return entry.values.tilePlatformCollision != 0;});
+    const bool needsCollisionBox = std::any_of(projectiles.begin(),projectiles.end(),
+        [](const ManagedProjectileEntry& entry) {
+            const auto& v=entry.values;
+            return v.tileCollisionBoxWidth != 0 || v.tileCollisionBoxHeight != 0 ||
+                   v.tileCollisionAnchorOffsetX != 0.f || v.tileCollisionAnchorOffsetY != 0.f;
+        });
+    if (needsTileCollisionHook &&
+        !installManagedProjectileTileCollisionHooks(needsPlatformPolicy,needsCollisionBox,error ? error : &tileCollisionError))
+        return false;
     auto nextView=std::make_shared<ProjectileDefinitions>(*std::atomic_load_explicit(&g_projectileView,std::memory_order_acquire));
     for (const auto& item : stagedProjectiles) {
         g_projectiles[item.first] = item.second;
@@ -2107,22 +2761,6 @@ namespace {
 std::mutex g_tileDefaultsMutex;
 std::map<int, std::pair<std::string, ManagedTileEntry>> g_tileDefaults;
 
-bool writeTileFlag(Il2CppClass* cls, const char* name, int type, bool enabled) {
-    if (!enabled) return true;
-    auto& a = il2cpp::api();
-    FieldInfo* field = cls ? il2cpp::findField(cls, name) : nullptr;
-    if (!field || !a.field_get_type || !a.type_get_name || !a.il2cpp_free) return false;
-    char* signature = a.type_get_name(a.field_get_type(field));
-    const bool safe = signature && std::strcmp(signature, "System.Boolean[]") == 0;
-    if (signature) a.il2cpp_free(signature);
-    if (!safe) return false;
-    Il2CppArray* values = nullptr;
-    a.field_static_get_value(field, &values);
-    if (!values || type < 0 || static_cast<uintptr_t>(type) >= values->length) return false;
-    static_cast<uint8_t*>(arrayData(values))[type] = 1;
-    return true;
-}
-
 Il2CppObject* tileStaticObject(Il2CppClass* cls, const char* name) {
     auto& a = il2cpp::api();
     if (!cls) return nullptr;
@@ -2137,55 +2775,125 @@ Il2CppObject* tileStaticObject(Il2CppClass* cls, const char* name) {
     return method ? a.runtime_invoke(method, nullptr, nullptr, &exc) : nullptr;
 }
 
-bool applyTileShape(int type, const ManagedTileEntry& e) {
+#include "experiments/csharp/NativeTileSaplingShape.h"
+
+bool applyTileShape(const std::string& mod,int type,const ManagedTileEntry& e) {
+    if(e.shape==4)return applyNativeSaplingShape(mod,type,e);
     if (e.shape == 0) return true;
-    if (e.shape != 1) return false;
-    auto& a = il2cpp::api();
-    Il2CppClass* cls = il2cpp::findClass({"Terraria.ObjectData", "TileObjectData", {}});
-    Il2CppObject* tile = tileStaticObject(cls, "newTile");
-    Il2CppObject* shape = tileStaticObject(cls, "Style2x1");
-    if (!tile || !shape) return false;
-    Il2CppClass* tileClass = a.object_get_class(tile);
-    const MethodInfo* copy = a.class_get_method_from_name(tileClass, "CopyFrom", 1);
-    const MethodInfo* setHeights = a.class_get_method_from_name(tileClass, "set_CoordinateHeights", 1);
-    const MethodInfo* addTile = cls ? a.class_get_method_from_name(cls, "addTile", 1) : nullptr;
-    Il2CppClass* intClass = il2cpp::findClass({"System", "Int32", {}});
-    if (!copy || !setHeights || !addTile || !intClass) return false;
-    Il2CppArray* heights = a.array_new(intClass, 1);
-    if (!heights) return false;
-    *static_cast<int32_t*>(arrayData(heights)) = e.coordinateHeight;
-    Il2CppObject* exc = nullptr;
-    void* copyArgs[1] = {shape};
-    a.runtime_invoke(copy, tile, copyArgs, &exc);
-    if (exc) return false;
-    void* heightArgs[1] = {heights};
-    a.runtime_invoke(setHeights, tile, heightArgs, &exc);
-    if (exc) return false;
-    int32_t id = type;
-    void* addArgs[1] = {&id};
-    a.runtime_invoke(addTile, nullptr, addArgs, &exc);
+    if (!tile_policy::validShape(e.shape)) return false;
+    auto& a=il2cpp::api();
+    auto* cls=il2cpp::findClass({"Terraria.ObjectData","TileObjectData",{}});
+    auto* tile=tileStaticObject(cls,"newTile");
+    if (!tile || !cls || !a.object_get_class || !a.method_get_param_count ||
+        !a.method_get_param || !a.method_get_return_type || !a.method_is_instance)
+        return false;
+    auto* tileClass=a.object_get_class(tile);
+    const auto typeIs=[&](const Il2CppType* type,const char* expected) {
+        if(!type||!a.type_get_name||!a.il2cpp_free)return false;
+        char* text=a.type_get_name(type);
+        const bool match=text&&std::strcmp(text,expected)==0;
+        if(text)a.il2cpp_free(text);
+        return match;
+    };
+    const auto* copy=a.class_get_method_from_name(tileClass,"CopyFrom",1);
+    const auto* addTile=a.class_get_method_from_name(cls,"addTile",1);
+    if(!copy||!addTile||!il2cpp::methodPointer(copy)||!il2cpp::methodPointer(addTile))
+        return false;
+    Il2CppObject* source=nullptr;
+    if(e.shape==2) {
+        const auto* get=a.class_get_method_from_name(cls,"GetTileData",3);
+        if(!get||!il2cpp::methodPointer(get)||a.method_is_instance(get)||
+           a.method_get_param_count(get)!=3||
+           !typeIs(a.method_get_return_type(get),"Terraria.ObjectData.TileObjectData"))
+            return false;
+        for(unsigned i=0;i<3;++i)
+            if(!typeIs(a.method_get_param(get,i),"System.Int32"))return false;
+        int32_t campfire=215,style=0,alternate=0;
+        void* args[]={&campfire,&style,&alternate};
+        Il2CppObject* exc=nullptr;
+        source=a.runtime_invoke(get,nullptr,args,&exc);
+        if(exc||!source||a.object_get_class(source)!=tileClass)return false;
+    } else {
+        source=tileStaticObject(cls,e.shape==1?"Style2x1":"Style1xX");
+    }
+    if(!source)return false;
+    struct NativeProperty {
+        const MethodInfo* setter=nullptr;
+        int offset=-1;
+        size_t size=0;
+    };
+    const auto resolve=[&](const char* fieldName,const char* type,size_t size,NativeProperty* out) {
+        // `assign` passa o endereco do valor ao runtime_invoke: so tipo valor.
+        // Tipo referencia (array/classe) iria como endereco de pilha.
+        if(std::strstr(type,"[]")||(size!=4&&size!=1))return false;
+        const std::string setterName=std::string("set_")+fieldName;
+        const auto* setter=a.class_get_method_from_name(tileClass,setterName.c_str(),1);
+        if(setter) {
+            if(!il2cpp::methodPointer(setter)||a.method_is_instance(setter)==false||
+               a.method_get_param_count(setter)!=1||
+               !typeIs(a.method_get_param(setter,0),type)||
+               !typeIs(a.method_get_return_type(setter),"System.Void"))return false;
+            *out={setter,-1,size};
+            return true;
+        }
+        std::string detail;
+        FieldInfo* field=nullptr;
+        int offset=-1;
+        if(!il2cpp::nativeFieldContract(tileClass,fieldName,type,false,size,
+                                        &field,&offset,&detail))return false;
+        *out={nullptr,offset,size};
+        return true;
+    };
+    const auto assign=[&](const NativeProperty& slot,const void* value) {
+        if(slot.setter) {
+            void* args[]={const_cast<void*>(value)};
+            Il2CppObject* exc=nullptr;
+            a.runtime_invoke(slot.setter,tile,args,&exc);
+            return exc==nullptr;
+        }
+        if(slot.offset<0)return false;
+        std::memcpy(reinterpret_cast<char*>(tile)+slot.offset,value,slot.size);
+        return true;
+    };
+    NativeProperty line{},yoff{},flip{};
+    if((e.shape!=1&&!resolve("StyleLineSkip","System.Int32",4,&line))||
+       (e.shape==3&&(!resolve("DrawYOffset","System.Int32",4,&yoff)||
+                     !resolve("DrawFlipHorizontal","System.Boolean",1,&flip))))return false;
+    const auto* setHeights=e.shape==1?a.class_get_method_from_name(tileClass,"set_CoordinateHeights",1):nullptr;
+    if(e.shape==1&&(!setHeights||!il2cpp::methodPointer(setHeights)))return false;
+    void* copyArgs[]={source};
+    Il2CppObject* exc=nullptr;
+    a.runtime_invoke(copy,tile,copyArgs,&exc);
+    if(exc)return false;
+    if(e.shape==1) {
+        auto* intClass=il2cpp::findClass({"System","Int32",{}});
+        if(!intClass||!a.array_new)return false;
+        auto* heights=a.array_new(intClass,1);
+        if(!heights)return false;
+        *static_cast<int32_t*>(arrayData(heights))=e.coordinateHeight;
+        void* args[]={heights};
+        Il2CppObject* error=nullptr;
+        a.runtime_invoke(setHeights,tile,args,&error);
+        if(error)return false;
+    } else {
+        int32_t skip=e.shape==2?9:2,offset=2;
+        bool drawFlip=true;
+        if(!assign(line,&skip)||
+           (e.shape==3&&(!assign(yoff,&offset)||!assign(flip,&drawFlip))))
+            return false;
+    }
+    int32_t id=type;
+    void* addArgs[]={&id};
+    a.runtime_invoke(addTile,nullptr,addArgs,&exc);
     return !exc;
 }
 
-bool applyTileFlags(int type, const ManagedTileEntry& e) {
-    Il2CppClass* main = il2cpp::findClass({"Terraria", "Main", {}});
-    Il2CppClass* sets = il2cpp::findClass({"Terraria.ID", "TileID", "Sets"});
-    Il2CppClass* room = sets ? il2cpp::findNested(sets, "RoomNeeds") : nullptr;
-    bool ok = true;
-    const auto apply = [&](Il2CppClass* cls, const char* field, int bit) {
-        if (!writeTileFlag(cls, field, type, (e.flags & bit) != 0)) ok = false;
-    };
-    apply(main, "tileTable", 1);
-    apply(main, "tileSolidTop", 2);
-    apply(main, "tileNoAttach", 4);
-    apply(main, "tileLavaDeath", 8);
-    apply(main, "tileFrameImportant", 16);
-    apply(sets, "DisableSmartCursor", 32);
-    apply(sets, "HasOutlines", 64);
-    apply(sets, "IgnoredByNpcStepUp", 128);
-    apply(room, "CountsAsTable", 256);
-    apply(main, "tileObsidianKill", 8);
-    return ok;
+bool applyTileFlags(const std::string& mod, int type, const ManagedTileEntry& entry) {
+    std::string error;
+    if (tile_flags::apply(type, entry.flags, &error)) return true;
+    BL_ERROR("[CSharp][ERROR][TileRegistration] Mod=%s Class=%s API=BunnyTile.Flags ContentId=%d Result=Rejected %s",
+             mod.c_str(), entry.name.c_str(), type, error.c_str());
+    return false;
 }
 
 using NativeAdjFn = void (*)(Il2CppObject*, const MethodInfo*);
@@ -2197,14 +2905,7 @@ std::array<std::pair<int, int>, kMaxNativeAdjacencies> g_adjPairs{};
 size_t g_adjCount = 0;
 
 bool addNativeAdjacency(int type, int vanilla) {
-    for (size_t i = 0; i < g_adjCount; ++i) {
-        if (g_adjPairs[i].first != type) continue;
-        g_adjPairs[i].second = vanilla;
-        return true;
-    }
-    if (g_adjCount == g_adjPairs.size()) return false;
-    g_adjPairs[g_adjCount++] = {type, vanilla};
-    return true;
+    return tile_adjacency::add(g_adjPairs, g_adjCount, type, vanilla);
 }
 
 void nativePlayerAdjTiles(Il2CppObject* player, const MethodInfo* method) {
@@ -2235,12 +2936,9 @@ void nativePlayerAdjTiles(Il2CppObject* player, const MethodInfo* method) {
             const int type = world.type[definition];
             if (type < runtime::kVanillaTileCount ||
                 static_cast<uintptr_t>(type) >= adjacent->length) continue;
-            for (size_t pair = 0; pair < g_adjCount; ++pair)
-                if (type == g_adjPairs[pair].first) {
-                    result[type] = 1;
-                    result[g_adjPairs[pair].second] = 1;
-                    break;
-                }
+            if (tile_adjacency::forEach(g_adjPairs, g_adjCount, type,
+                    [&](int alias) { result[alias] = 1; }))
+                result[type] = 1;
         }
 }
 
@@ -2269,24 +2967,17 @@ bool ensureNativeAdjTiles() {
     return true;
 }
 
-bool appendNativeHousingTable(int type) {
-    auto& a = il2cpp::api();
+bool appendNativeHousingTable(const std::string& mod, const ManagedTileEntry& entry) {
     Il2CppClass* sets = il2cpp::findClass({"Terraria.ID", "TileID", "Sets"});
     Il2CppClass* room = sets ? il2cpp::findNested(sets, "RoomNeeds") : nullptr;
-    FieldInfo* field = room ? il2cpp::findField(room, "CountsAsTableTypes") : nullptr;
-    if (!field) return false;
-    Il2CppArray* array = nullptr;
-    a.field_static_get_value(field, &array);
-    if (!array) return false;
-    const auto* values = static_cast<const int32_t*>(arrayData(array));
-    for (uintptr_t i = 0; i < array->length; ++i)
-        if (values[i] == type) return true;
-    if (array->length >= 4096) return false;
-    Il2CppArray* enlarged = runtime::TypeTables::resizedCopy(array, array->length + 1);
-    if (!enlarged) return false;
-    static_cast<int32_t*>(arrayData(enlarged))[array->length] = type;
-    a.field_static_set_value(field, enlarged);
-    return true;
+    std::string error;
+    if (tile_flags::appendHousing(entry.type, room,
+            [](Il2CppArray* array, uintptr_t size) {
+                return runtime::TypeTables::resizedCopy(array, size);
+            }, &error)) return true;
+    BL_ERROR("[CSharp][ERROR][TileRegistration] Mod=%s Class=%s API=BunnyTile.Flags.CountsAsTable ContentId=%d Result=Rejected %s",
+             mod.c_str(), entry.name.c_str(), entry.type, error.c_str());
+    return false;
 }
 
 bool installCraftingStationIcon(const std::string& modId,
@@ -2313,22 +3004,48 @@ bool installCraftingStationIcon(const std::string& modId,
 }
 
 void onManagedTilesInstalled(int first, int last) {
+    BL_DEBUG("[CSharp][Tile] Stage=InstallBegin First=%d Last=%d",first,last);
     std::vector<std::pair<std::string, ManagedTileEntry>> records;
     {
         std::lock_guard<std::mutex> lock(g_tileDefaultsMutex);
         for (const auto& [type, entry] : g_tileDefaults)
             if (type >= first && type <= last) records.push_back(entry);
     }
+    BL_DEBUG("[CSharp][Tile] Stage=InstallSnapshot Count=%zu",records.size());
     for (const auto& [mod, entry] : records) {
-        const bool flags = applyTileFlags(entry.type, entry);
-        const bool shape = applyTileShape(entry.type, entry);
-        const bool housing = (entry.flags & 256) == 0 || appendNativeHousingTable(entry.type);
+        BL_DEBUG("[CSharp][Tile] Stage=InstallEntry Class=%s Type=%d",
+                 entry.name.c_str(),entry.type);
+        const bool flags = applyTileFlags(mod, entry.type, entry);
+        const bool shape = applyTileShape(mod,entry.type, entry);
+        const bool housing = (entry.flags & 256) == 0 || appendNativeHousingTable(mod, entry);
         const bool guide = installCraftingStationIcon(mod, entry);
-        const bool adjacency = entry.adjacentTile < 0 ||
-            (ensureNativeAdjTiles() && addNativeAdjacency(entry.type, entry.adjacentTile));
+        bool adjacency = true;
+        if (entry.adjacentTile >= 0 || !entry.adjacentTiles.empty()) {
+            adjacency = ensureNativeAdjTiles();
+            if (adjacency && entry.adjacentTile >= 0)
+                adjacency = addNativeAdjacency(entry.type, entry.adjacentTile);
+            if (adjacency)
+                for (int alias : entry.adjacentTiles)
+                    if (!addNativeAdjacency(entry.type, alias)) {
+                        adjacency = false;
+                        break;
+                    }
+        }
         const bool gameplay = flags && shape &&
             registerNativeTileGameplay({mod, entry.name, entry.dustName, entry.type,
-                                        entry.shape, entry.failDust, entry.normalDust});
+                                        entry.shape, entry.failDust, entry.normalDust,
+                                        entry.animationFrameHeight, entry.animationFrames,
+                                        entry.animationFrameTicks,
+                                        entry.allowBreaking, entry.allowDrops, entry.callbackMask,
+                                        entry.cacheDrawData, {},entry.frameToggle,
+                                        (entry.flags & 65536)!=0,entry.registeredDrops,
+                                         entry.minPick,entry.mineResist,
+                                         entry.saplingGroundTile.empty()?-1:
+                                           runtime::modTileTypeByKey(mod+"/"+entry.saplingGroundTile),
+                                         entry.saplingVanillaGroundTile,
+                                         entry.saplingGrowthChance});
+        if (gameplay && entry.animationFrameHeight > 0)
+            runtime::setModTileAnimation(entry.type, entry.animationFrameHeight);
         if (!gameplay)
             BL_ERROR("[CSharp][ERROR][Tile] Mod=%s Class=%s Stage=NativeGameplay Result=Incomplete",
                      mod.c_str(), entry.name.c_str());
@@ -2341,7 +3058,10 @@ void onManagedTilesInstalled(int first, int last) {
         if (!guide)
             BL_DEBUG("[CSharp][Tile] Mod=%s Class=%s GuideIcon=Pending",
                      mod.c_str(), entry.name.c_str());
+        BL_DEBUG("[CSharp][Tile] Stage=InstalledEntry Class=%s Type=%d Flags=%d Shape=%d Gameplay=%d",
+                 entry.name.c_str(),entry.type,flags?1:0,shape?1:0,gameplay?1:0);
     }
+    BL_DEBUG("[CSharp][Tile] Stage=InstallComplete Count=%zu",records.size());
 }
 
 }
@@ -2351,13 +3071,35 @@ bool applyManagedNativeTileDefaultsBatch(const std::string& modId,
     for (const auto& entry : tiles) {
         if (entry.type < runtime::kVanillaTileCount ||
             runtime::modTileTypeByName(modId, entry.name) != entry.type ||
-            entry.flags < 0 || entry.flags > 511 ||
-            entry.shape < 0 || entry.shape > 1 || entry.coordinateHeight != 18 ||
+            entry.flags < 0 || entry.flags > tile_flags::supportedMask ||
+            entry.shape < 0 || entry.shape > 4 ||
+            entry.frameToggle < 0 || entry.frameToggle > 2 ||
+            (entry.frameToggle==1&&entry.shape!=2) ||
+            (entry.frameToggle==2&&entry.shape!=3) || entry.coordinateHeight != 18 ||
+            entry.animationFrameHeight < 0 || entry.animationFrameHeight > 4096 ||
+            entry.animationFrames < 1 || entry.animationFrames > 64 ||
+            entry.animationFrameTicks < 0 || entry.animationFrameTicks > 600 ||
+            (entry.animationFrames > 1 &&
+             (entry.animationFrameHeight == 0 || entry.animationFrameTicks == 0)) ||
+            (entry.animationFrames == 1 && entry.animationFrameTicks != 0) ||
             entry.adjacentTile < -1 || entry.adjacentTile >= runtime::kVanillaTileCount ||
+            entry.adjacentTiles.size() > 16 ||
+            !tile_policy::validCallbackMask(entry.callbackMask) ||
+             !tile_mining::valid(entry.minPick,entry.mineResist) ||
+            !tile_growth::valid(entry.shape,entry.saplingGrowthChance) ||
             entry.mapR < 0 || entry.mapR > 255 ||
             entry.mapG < 0 || entry.mapG > 255 ||
             entry.mapB < 0 || entry.mapB > 255)
             return false;
+    }
+    for (const auto& entry : tiles) {
+        for (size_t i = 0; i < entry.adjacentTiles.size(); ++i) {
+            const int alias = entry.adjacentTiles[i];
+            if (alias < 0 || alias >= runtime::kVanillaTileCount ||
+                alias == entry.adjacentTile ||
+                std::find(entry.adjacentTiles.begin(), entry.adjacentTiles.begin() + i, alias) !=
+                    entry.adjacentTiles.begin() + i) return false;
+        }
     }
     {
         std::lock_guard<std::mutex> lock(g_tileDefaultsMutex);
@@ -2372,6 +3114,302 @@ bool applyManagedNativeTileDefaultsBatch(const std::string& modId,
     }
     runtime::setNativeTilesInstalledHook(onManagedTilesInstalled);
     runtime::requestNativeTileDefaults();
+    return true;
+}
+
+
+bool publishManagedNativeGores(const std::string& modId,const std::string& directory,
+                               const std::vector<ManagedGoreEntry>& gores,
+                               std::map<std::string,int>* ids,std::string* error) {
+    if(!ids||!error)return false;
+    if(gores.empty())return true;
+    const auto fail=[&](const char* stage,const std::string& reason) {
+        *error="[CSharp][GoreLoader] Mod="+modId+" Stage="+stage+
+               " Reason="+reason+" Result=Rejected";
+        BL_ERROR("%s",error->c_str());
+        return false;
+    };
+    auto& a=il2cpp::api();
+    table_publication::Roots roots(a);
+    if(!a.field_static_get_value||!a.field_static_set_value||!a.object_get_class||
+       !a.class_get_element_class||!a.class_get_name||!a.array_new||
+       !a.field_get_flags||!a.class_get_rank||!a.class_is_valuetype||
+       !a.runtime_invoke||!a.gchandle_new||!a.gchandle_get_target||!a.gchandle_free)
+        return fail("ABI","UnavailableIL2CPPAccess");
+    auto* textures=il2cpp::findClass({"Terraria.GameContent","TextureAssets",{}});
+    auto* goreClass=il2cpp::findClass({"Terraria.ID","GoreID",{}});
+    auto* sets=goreClass?il2cpp::findNested(goreClass,"Sets"):nullptr;
+    auto* safety=il2cpp::findClass({"Terraria.GameContent","ChildSafety",{}});
+    if(!textures||!sets||!safety)return fail("ABI","GoreClassesUnavailable");
+    const std::array<Il2CppClass*,6> classes={textures,sets,sets,sets,sets,safety};
+    const std::array<const char*,6> names={
+        "Gore","SpecialAI","DisappearSpeed","DisappearSpeedAlpha","IsDrip","SafeGore"
+    };
+    std::array<FieldInfo*,6> fields{};
+    std::array<Il2CppArray*,6> original{};
+    std::array<Il2CppArray*,6> pending{};
+    for(size_t i=0;i<fields.size();++i) {
+        fields[i]=il2cpp::findField(classes[i],names[i]);
+        if(!fields[i]||!(a.field_get_flags(fields[i])&0x10u))
+            return fail("ABI",std::string("MissingStaticField:")+names[i]);
+        a.field_static_get_value(fields[i],&original[i]);
+        if(!original[i]||a.class_get_rank(original[i]->obj.klass)!=1||!roots.add(reinterpret_cast<Il2CppObject*>(original[i])))return fail("ABI",std::string("MissingArray:")+names[i]);
+    }
+    const auto first=original[0]->length;
+    if(!gore_policy::capacity(first,gores.size()))
+        return fail("Capacity","ExceededGoreIDs");
+    for(size_t i=1;i<original.size();++i)
+        if(original[i]->length>first || original[i]->length==0)
+            return fail("ABI",std::string("GoreTableLengthMismatch:")+names[i]);
+    const auto elemName=[&](Il2CppArray* arr)->std::string {
+        auto* cls=a.class_get_element_class(
+            a.object_get_class(reinterpret_cast<Il2CppObject*>(arr)));
+        const char* name=cls?a.class_get_name(cls):nullptr;
+        return name?name:"";
+    };
+    const std::string special=elemName(original[1]);
+    const std::string speed=elemName(original[2]);
+    const std::string alpha=elemName(original[3]);
+    if((special!="Byte"&&special!="Int32")||
+       (speed!="Int32"&&speed!="Single"&&speed!="Byte")||
+       (alpha!="Int32"&&alpha!="Single"&&alpha!="Byte")||
+       elemName(original[4])!="Boolean"||elemName(original[5])!="Boolean")
+        return fail("ABI","UnexpectedGoreElementTypes");
+    for(size_t i=1;i<original.size();++i) {
+        const std::string type=elemName(original[i]);
+        const size_t width=(type=="Byte"||type=="Boolean")?1:4;
+        if(!il2cpp::nativeArrayContract(original[i],type.c_str(),width,32767))
+            return fail("ABI","GoreArrayLayoutMismatch");
+    }
+    std::map<std::string,bool> namesUsed;
+    std::vector<std::string> files;
+    files.reserve(gores.size());
+    for(const auto& gore:gores) {
+        if(!gore_policy::valid(gore.name,gore.texture,gore.specialAI)||
+           !namesUsed.emplace(gore.name,true).second)
+            return fail("Preflight","InvalidOrDuplicateGore:"+gore.name);
+        const auto file=gore_policy::filePath(directory,gore.texture);
+        if(file.empty()||!fileExists(file))
+            return fail("Files","MissingGorePng:"+gore.name);
+        files.push_back(file);
+    }
+    std::vector<Il2CppObject*> assets;
+    assets.reserve(gores.size());
+    for(size_t i=0;i<gores.size();++i) {
+        int width=0,height=0;
+        auto* asset=runtime::content::loadTextureAsset(
+            files[i],nullptr,0,modId+"/Gores/"+gores[i].name,&width,&height);
+        if(!asset||width<1||height<1||width>4096||height>4096)
+            return fail("Texture","InvalidGorePng:"+gores[i].name);
+        if(!roots.add(asset))return fail("GC","GoreAssetRootFailed");
+        assets.push_back(asset);
+    }
+    const auto total=first+gores.size();
+    for(size_t i=0;i<pending.size();++i) {
+        pending[i]=runtime::TypeTables::resizedCopy(original[i],total);
+        if(!pending[i]||!roots.add(reinterpret_cast<Il2CppObject*>(pending[i])))return fail("Array","ResizeFailed:"+std::string(names[i]));
+    }
+    auto* arrays=il2cpp::findClass({"System","Array",{}});
+    const auto* set=arrays?il2cpp::findMethodBySignature(arrays,
+        il2cpp::parseSignature("void SetValue(object value, int index)")):nullptr;
+    if(!set||!il2cpp::methodPointer(set))
+        return fail("ABI","GoreAssetSetValueMissing");
+    const auto putNumber=[&](size_t arrayIndex,int index,int number)->bool {
+        auto* array=pending[arrayIndex];
+        if(!array||static_cast<uintptr_t>(index)>=array->length)return false;
+        const std::string type=elemName(array);
+        auto* bytes=static_cast<char*>(arrayData(array));
+        if(type=="Byte"||type=="Boolean") {
+            if(number<0||number>255)return false;
+            bytes[index]=static_cast<char>(number);
+            return true;
+        }
+        if(type=="Int32") {
+            int value=number;
+            std::memcpy(bytes+static_cast<size_t>(index)*sizeof(value),&value,sizeof(value));
+            return true;
+        }
+        if(type=="Single") {
+            float value=static_cast<float>(number);
+            std::memcpy(bytes+static_cast<size_t>(index)*sizeof(value),&value,sizeof(value));
+            return true;
+        }
+        return false;
+    };
+    for(size_t i=0;i<gores.size();++i) {
+        int index=static_cast<int>(first+i);
+        Il2CppObject* exception=nullptr;
+        void* args[]={assets[i],&index};
+        a.runtime_invoke(set,reinterpret_cast<Il2CppObject*>(pending[0]),args,&exception);
+        if(exception||!putNumber(1,index,gores[i].specialAI)||
+           !putNumber(2,index,1)||!putNumber(3,index,1)||
+           !putNumber(4,index,0)||!putNumber(5,index,gores[i].safeGore?1:0))
+            return fail("Publish","GoreValuesFailed:"+gores[i].name);
+    }
+    if(!table_publication::publish(a,fields.data(),original.data(),pending.data(),
+                                   fields.size(),roots))
+        return fail("Publish","GoreTablesNotConfirmed");
+    std::vector<gore::DeclaredGore> declared;
+    for(size_t i=0;i<gores.size();++i)
+        declared.push_back({gores[i].name,static_cast<int>(first+i),assets[i],
+                            gores[i].specialAI,gores[i].safeGore});
+    if(!gore::adoptDeclared(modId,declared,error))return false;
+    for(size_t i=0;i<gores.size();++i)
+        ids->emplace(gores[i].name,static_cast<int>(first+i));
+    BL_INFO("[CSharp][GoreLoader] Mod=%s Registered=%zu First=%zu Result=Ready",
+            modId.c_str(),gores.size(),static_cast<size_t>(first));
+    return true;
+}
+
+bool publishManagedNativeTrees(const std::string& modId,const std::string& directory,
+                               const std::vector<ManagedTreeEntry>& trees,std::string* error) {
+    if(!error)return false;
+    const auto fail=[&](const std::string& stage,const std::string& detail) {
+        *error="[CSharp][TreeLoader] Mod="+modId+" Stage="+stage+
+               " Result=Rejected Reason="+detail;
+        BL_ERROR("%s",error->c_str());
+        return false;
+    };
+    if(trees.empty())return true;
+    BL_DEBUG("[CSharp][TreeLoader] Stage=NativeBegin Trees=%zu",trees.size());
+    if(trees.size()>255||runtime::modTreeCount()+static_cast<int>(trees.size())>255)
+        return fail("Preflight","CapacityExceeded");
+    auto& a=il2cpp::api();
+    table_publication::Roots roots(a);
+    if(!a.field_static_get_value||!a.field_static_set_value||
+       !a.field_get_flags||!a.class_get_rank||!a.class_is_valuetype||
+       !a.runtime_invoke||!a.object_get_class||!a.array_new||
+       !a.gchandle_new||!a.gchandle_get_target||!a.gchandle_free)
+        return fail("ABI","MissingIl2CppFunctions");
+    auto* textures=il2cpp::findClass({"Terraria.GameContent","TextureAssets",{}});
+    auto* fieldTop=textures?il2cpp::findField(textures,"TreeTop"):nullptr;
+    auto* fieldBranch=textures?il2cpp::findField(textures,"TreeBranch"):nullptr;
+    Il2CppArray* originalTop=nullptr;
+    Il2CppArray* originalBranch=nullptr;
+    if(!fieldTop||!fieldBranch||!(a.field_get_flags(fieldTop)&0x10u)||
+       !(a.field_get_flags(fieldBranch)&0x10u))return fail("ABI","TextureTablesUnavailable");
+    a.field_static_get_value(fieldTop,&originalTop);
+    a.field_static_get_value(fieldBranch,&originalBranch);
+    if(!originalTop||!originalBranch||
+       a.class_get_rank(originalTop->obj.klass)!=1||
+       a.class_get_rank(originalBranch->obj.klass)!=1||
+       originalTop->length!=originalBranch->length||
+       originalTop->length+trees.size()>32767)
+        return fail("ABI","TextureTablesMismatch");
+    if(!roots.add(reinterpret_cast<Il2CppObject*>(originalTop))||
+       !roots.add(reinterpret_cast<Il2CppObject*>(originalBranch)))
+        return fail("GC","OriginalTreeTableRootFailed");
+    auto* sysArray=il2cpp::findClass({"System","Array",{}});
+    const auto* arraySet=sysArray?il2cpp::findMethodBySignature(sysArray,
+        il2cpp::parseSignature("void SetValue(object value, int index)")):nullptr;
+    if(!arraySet||!il2cpp::methodPointer(arraySet))
+        return fail("ABI","ArrayWriteUnavailable");
+    if(!runtime::prepareModTreeRendering())
+        return fail("BindRendering","MissingNativeTreeDrawOrGrowthHooks");
+    if(!runtime::prepareModTreeDrops(true))
+        return fail("BindTreeDrops","MissingNativeDropsAcornOrRandomABI");
+    if(!runtime::prepareModTreePlanting())
+        return fail("BindSaplingPlanting","MissingTileObjectCanPlaceABI");
+    if(!runtime::prepareModTreeEffects())
+        return fail("BindTreeEffects","MissingGetTreeLeafABI");
+    const bool needsShake=std::any_of(trees.begin(),trees.end(),[](const ManagedTreeEntry& e) {
+        return e.shakeItemType>=0;
+    });
+    if(needsShake&&!runtime::prepareModTreeShake())
+        return fail("BindTreeShake","MissingNativeShakeABI");
+    const bool needsShakeEffects=std::any_of(trees.begin(),trees.end(),[](const ManagedTreeEntry& e) {
+        return e.shakeItemType>=0 && e.shakeLeaves && e.leafGoreType>=0;
+    });
+    if(needsShakeEffects&&!runtime::prepareModTreeShakeEffects())
+        return fail("BindTreeShake","MissingNativeShakeEffectsABI");
+    BL_DEBUG("[CSharp][TreeLoader] Stage=NativeHooksReady Trees=%zu",trees.size());
+    std::map<int,bool> uniqueGround;
+    struct Ready {
+        int ground=-1;
+        int sapling=-1;
+        std::array<std::string,3> paths;
+        Il2CppObject* trunk=nullptr;
+        Il2CppObject* top=nullptr;
+        Il2CppObject* branch=nullptr;
+    };
+    std::vector<Ready> ready;
+    ready.reserve(trees.size());
+    for(const auto& tree:trees) {
+        const int ground=runtime::modTileTypeByName(modId,tree.groundTile);
+        const int sapling=runtime::modTileTypeByName(modId,tree.saplingTile);
+        if(ground<runtime::kVanillaTileCount||sapling<runtime::kVanillaTileCount||
+           !uniqueGround.emplace(ground,true).second||
+           runtime::hasModTree(ground)||!tree_texture::validStem(tree.texture))
+            return fail("Resolve","GroundOrSaplingNotOwnedOrDuplicate");
+        const auto files=tree_texture::paths(directory,tree.texture);
+        for(const auto& path:files) {
+            if(path.empty()||!fileExists(path))
+                return fail("Files","MissingTreeTexture:"+tree.name);
+        }
+        ready.push_back({ground,sapling,files,nullptr,nullptr,nullptr});
+    }
+    BL_DEBUG("[CSharp][TreeLoader] Stage=NativePreflightReady Trees=%zu",ready.size());
+    for(size_t i=0;i<ready.size();++i) {
+        auto& tree=ready[i];
+        int width[3]={},height[3]={};
+        Il2CppObject* assets[3]={};
+        for(int part=0;part<3;++part) {
+            assets[part]=runtime::content::loadTextureAsset(
+                tree.paths[part],nullptr,0,
+                modId+"/"+trees[i].name+(part==1?"_Tops":part==2?"_Branches":""),
+                &width[part],&height[part]);
+            if(!assets[part]||!roots.add(assets[part]))return fail("Asset","LoadFailed:"+trees[i].name);
+        }
+        if(!tree_texture::validDimensions(width[0],height[0],width[1],height[1],
+                                           width[2],height[2]))
+            return fail("Asset","InvalidDimensions:"+trees[i].name);
+        tree.trunk=runtime::content::textureAssetValue(assets[0]);
+        tree.top=assets[1];
+        tree.branch=assets[2];
+        if(!tree.trunk)return fail("Asset","TrunkTextureNotLoaded:"+trees[i].name);
+    }
+    BL_DEBUG("[CSharp][TreeLoader] Stage=NativeTexturesReady Trees=%zu",ready.size());
+    auto* newTop=runtime::TypeTables::resizedCopy(originalTop,
+        originalTop->length+ready.size());
+    if(!newTop||!roots.add(reinterpret_cast<Il2CppObject*>(newTop)))
+        return fail("GC","TreeTopRootFailed");
+    auto* newBranch=runtime::TypeTables::resizedCopy(originalBranch,
+        originalBranch->length+ready.size());
+    if(!newBranch||!roots.add(reinterpret_cast<Il2CppObject*>(newBranch)))
+        return fail("GC","TreeBranchRootFailed");
+    const auto set=[&](Il2CppArray* array,int index,Il2CppObject* asset) {
+        Il2CppObject* exception=nullptr;
+        void* args[]={asset,&index};
+        a.runtime_invoke(arraySet,reinterpret_cast<Il2CppObject*>(array),args,&exception);
+        return exception==nullptr;
+    };
+    for(size_t i=0;i<ready.size();++i) {
+        const int index=static_cast<int>(originalTop->length+i);
+        if(!set(newTop,index,ready[i].top)||
+           !set(newBranch,index,ready[i].branch))
+            return fail("Asset","ArrayWriteFailed");
+    }
+    BL_DEBUG("[CSharp][TreeLoader] Stage=NativeArraysReady Trees=%zu",ready.size());
+    FieldInfo* fields[]={fieldTop,fieldBranch};
+    Il2CppArray* originals[]={originalTop,originalBranch};
+    Il2CppArray* replacements[]={newTop,newBranch};
+    if(!table_publication::publish(a,fields,originals,replacements,2,roots))
+        return fail("Publish","TreeTablesNotConfirmed");
+    for(size_t i=0;i<ready.size();++i) {
+        const int style=static_cast<int>(originalTop->length+i);
+        if(!runtime::registerModTreeChecked(ready[i].ground,ready[i].trunk,style)||
+           !runtime::configureModTreeSapling(ready[i].ground,ready[i].sapling)||
+           !runtime::configureModTreeDrops(ready[i].ground,trees[i].woodItemType,
+                                            trees[i].canDropAcorn)||
+           !runtime::configureModTreeEffects(ready[i].ground,trees[i].leafGoreType,
+                                              trees[i].dustType)||
+           (trees[i].shakeItemType>=0&&
+            !runtime::configureModTreeShake(ready[i].ground,trees[i].shakeItemType,
+                                             trees[i].shakeLeaves)))
+            return fail("Publish","TreeRegistrationOrDropsFailed:"+trees[i].name);
+    }
+    BL_INFO("[CSharp][TreeLoader] Mod=%s Trees=%zu Stage=Publish Result=Ready",
+            modId.c_str(),ready.size());
     return true;
 }
 
@@ -2409,6 +3447,13 @@ int registerNativeContent(void* context, const NativeContentSpec* spec) {
     const std::string display = spec->displayName && *spec->displayName
         ? std::string(spec->displayName).substr(0, 128)
         : std::string(spec->name);
+    if (spec->kind == NativeWall) {
+        std::string wallError;
+        const int type=runtime::registerModWall({ctx.modId,spec->name,path},&wallError);
+        if(type<0){ctx.lastError="[CSharp][ERROR][WallRegistration] Mod="+ctx.modId+" Class="+spec->name+" File="+ctx.sourceFile+" Stage=NativeRegister Result=Rejected Detail="+wallError;BL_ERROR("%s",ctx.lastError.c_str());return -1;}
+        ++ctx.walls;
+        return type;
+    }
     if (spec->kind == NativeTile) {
         bl::runtime::ModTileDef def{};
         def.mod = ctx.modId;
@@ -2542,24 +3587,8 @@ int registerNativeContent(void* context, const NativeContentSpec* spec) {
         }
         return type;
     }
-    if (spec->kind == NativeWeapon) {
-        if (spec->damage < 1 || spec->damage > 1000 ||
-            spec->useTime < 2 || spec->useTime > 120 ||
-            spec->shootSpeed < 1.f || spec->shootSpeed > 40.f ||
-            !bl::runtime::modProjectileBelongsTo(spec->shootType, ctx.modId)) return -1;
-        bl::runtime::ModItemDef def{};
-        def.mod = ctx.modId;
-        def.name = spec->name;
-        def.texture = path;
-        def.names=ctx.sourceNames;def.names.push_back({"", display});
-        const int type = bl::runtime::registerModItem(std::move(def));
-        if (type >= 0) {
-            g_weapons[type] = {spec->damage, spec->useTime, spec->shootSpeed, spec->shootType};
-            publishWeaponDefaults();
-            ++ctx.items;
-        }
-        return type;
-    }
+    if (spec->kind == NativeWeapon)
+        return registerNativeWeapon(ctx, *spec, path, display);
     return -1;
 }
 

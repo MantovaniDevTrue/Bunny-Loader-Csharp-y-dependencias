@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <functional>
 #include <cstdint>
 #include <vector>
 
@@ -36,8 +37,11 @@ AutoWorldLifecycleStatus autoWorldLifecycleStatus();
 void startAutoSourceRuntime();
 bool preWorldCSharpContentReady();
 bool installCSharpWorldEntryGate();
-void noteAutoWorldTilesLoaded();
+void noteAutoWorldTilesLoaded(const std::string& worldPath);
 void noteAutoGameUpdate();
+bool runSourcePublicationOnGameThread(const char* stage,
+                                      std::function<bool()> callback,
+                                      std::string* error);
 bool submitInteractiveConsoleSource(const std::string& id, const std::string& root,
                                     const std::string& workDir, std::string* error);
 std::vector<std::string> takeInteractiveConsoleOutput();

@@ -92,6 +92,18 @@ public sealed class BunnyHookScope : IDisposable
     {
         get { lock(gate) { if(disposed)throw new ObjectDisposedException(nameof(BunnyHookScope));return native??=new BunnyNativeScope(); } }
     }
+    /// <summary>Estágio interno ARM64 do Terraria; nunca usa o motor JavaScript.</summary>
+    public BunnyMethodHook HookSystemStage(string stageName, BunnyVoidHook callback)
+    {
+        lock (gate)
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(BunnyHookScope));
+            BunnyMethodHook handle = BunnyHooks.RegisterSystemStage(stageName, callback);
+            handles.Add(handle);
+            return handle;
+        }
+    }
+
     public BunnyMethodHook HookVoid(string type, string method, BunnyVoidHook callback, bool isStatic = false)
     {
         lock (gate)
@@ -127,7 +139,7 @@ public sealed class BunnyHookScope : IDisposable
         lock (gate)
         {
             if (disposed) throw new ObjectDisposedException(nameof(BunnyHookScope));
-            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, 1);
+            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, BunnyExtendedHookModes.Int32Zero);
             handles.Add(handle);
             return handle;
         }
@@ -137,7 +149,7 @@ public sealed class BunnyHookScope : IDisposable
         lock (gate)
         {
             if (disposed) throw new ObjectDisposedException(nameof(BunnyHookScope));
-            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, 2);
+            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, BunnyExtendedHookModes.VoidInt32);
             handles.Add(handle);
             return handle;
         }
@@ -147,7 +159,7 @@ public sealed class BunnyHookScope : IDisposable
         lock (gate)
         {
             if (disposed) throw new ObjectDisposedException(nameof(BunnyHookScope));
-            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, 3);
+            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, BunnyExtendedHookModes.VoidInt32Pair);
             handles.Add(handle);
             return handle;
         }
@@ -157,7 +169,7 @@ public sealed class BunnyHookScope : IDisposable
         lock (gate)
         {
             if (disposed) throw new ObjectDisposedException(nameof(BunnyHookScope));
-            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, 4);
+            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, BunnyExtendedHookModes.Int32Triple);
             handles.Add(handle);
             return handle;
         }
@@ -167,7 +179,7 @@ public sealed class BunnyHookScope : IDisposable
         lock (gate)
         {
             if (disposed) throw new ObjectDisposedException(nameof(BunnyHookScope));
-            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, 5);
+            BunnyMethodHook handle = BunnyHooks.RegisterExtended(type, method, callback, isStatic, BunnyExtendedHookModes.VoidInt32Triple);
             handles.Add(handle);
             return handle;
         }
@@ -262,6 +274,37 @@ public static class BunnyHooks
         if (scope is null) throw new ArgumentNullException(nameof(scope));
         return scope.HookVoidInt32Triple(type, method, callback, isStatic);
     }
+    internal static BunnyMethodHook RegisterSystemStage(string stageName, BunnyVoidHook callback)
+    {
+        if (string.IsNullOrWhiteSpace(stageName) || stageName.Length > 64 ||
+            stageName.IndexOf('\0') >= 0)
+            throw new ArgumentException("Estágio nativo inválido", nameof(stageName));
+        if (callback is null) throw new ArgumentNullException(nameof(callback));
+        lock (RegistrationLock)
+        {
+            int slot = -1;
+            for (int i = 0; i < Slots.Length; i++)
+                if (Slots[i] is null || Slots[i]!.IsDisposed) { slot = i; break; }
+            if (slot < 0) throw new InvalidOperationException("Limite de 64 hooks ativos");
+            var handle = new BunnyMethodHook(callback);
+            Volatile.Write(ref Slots[slot], handle);
+            try
+            {
+                int native = NativeInstallSystemStage(stageName, slot);
+                if (native < 0)
+                    throw new NotSupportedException("Estágio nativo " + stageName +
+                        " recusado pelo Terraria (codigo " + native + ")");
+                handle.NativeHandle = native;
+                return handle;
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+    }
+
     internal static BunnyMethodHook Register(string type, string method, BunnyVoidHook callback, bool isStatic)
     {
         if (string.IsNullOrEmpty(type) || !type.StartsWith("Terraria.", StringComparison.Ordinal) || type.Length > 256 || type.IndexOf('\0') >= 0)
@@ -361,11 +404,11 @@ public static class BunnyHooks
         if (callback is null) throw new ArgumentNullException(nameof(callback));
         BunnyMethodHook handle = callback switch
         {
-            BunnyInt32ZeroHook c when mode == 1 => new BunnyMethodHook(c),
-            BunnyVoidInt32Hook c when mode == 2 => new BunnyMethodHook(c),
-            BunnyVoidInt32PairHook c when mode == 3 => new BunnyMethodHook(c),
-            BunnyInt32TripleHook c when mode == 4 => new BunnyMethodHook(c),
-            BunnyVoidInt32TripleHook c when mode == 5 => new BunnyMethodHook(c),
+            BunnyInt32ZeroHook c when mode == BunnyExtendedHookModes.Int32Zero => new BunnyMethodHook(c),
+            BunnyVoidInt32Hook c when mode == BunnyExtendedHookModes.VoidInt32 => new BunnyMethodHook(c),
+            BunnyVoidInt32PairHook c when mode == BunnyExtendedHookModes.VoidInt32Pair => new BunnyMethodHook(c),
+            BunnyInt32TripleHook c when mode == BunnyExtendedHookModes.Int32Triple => new BunnyMethodHook(c),
+            BunnyVoidInt32TripleHook c when mode == BunnyExtendedHookModes.VoidInt32Triple => new BunnyMethodHook(c),
             _ => throw new ArgumentException("Callback incompativel com assinatura", nameof(callback))
         };
         lock (RegistrationLock)
@@ -498,14 +541,14 @@ public static class BunnyHooks
     {
         success = 0;
         returnedValue = 0;
-        if (slot < 0 || slot >= Slots.Length || ticket <= 0 || currentTicket != 0 || mode < 1 || mode > 5) return;
+        if (slot < 0 || slot >= Slots.Length || ticket <= 0 || currentTicket != 0 || mode < BunnyExtendedHookModes.Min || mode > BunnyExtendedHookModes.Max) return;
         BunnyMethodHook? handle = Volatile.Read(ref Slots[slot]);
         if (handle is null) return;
-        if ((mode == 1 && handle.Int32ZeroCallback is null) ||
-            (mode == 2 && handle.VoidInt32Callback is null) ||
-            (mode == 3 && handle.VoidInt32PairCallback is null) ||
-            (mode == 4 && handle.Int32TripleCallback is null) ||
-            (mode == 5 && handle.VoidInt32TripleCallback is null)) return;
+        if ((mode == BunnyExtendedHookModes.Int32Zero && handle.Int32ZeroCallback is null) ||
+            (mode == BunnyExtendedHookModes.VoidInt32 && handle.VoidInt32Callback is null) ||
+            (mode == BunnyExtendedHookModes.VoidInt32Pair && handle.VoidInt32PairCallback is null) ||
+            (mode == BunnyExtendedHookModes.Int32Triple && handle.Int32TripleCallback is null) ||
+            (mode == BunnyExtendedHookModes.VoidInt32Triple && handle.VoidInt32TripleCallback is null)) return;
         currentSlot = slot;
         currentTicket = ticket;
         currentSelf = self;
@@ -513,11 +556,11 @@ public static class BunnyHooks
         {
             switch (mode)
             {
-                case 1: returnedValue = handle.Int32ZeroCallback!(new BunnyOriginalInt32(slot, ticket), self); break;
-                case 2: handle.VoidInt32Callback!(new BunnyOriginalVoid(slot, ticket), self, first); break;
-                case 3: handle.VoidInt32PairCallback!(new BunnyOriginalVoid(slot, ticket), self, first, second); break;
-                case 4: returnedValue = handle.Int32TripleCallback!(new BunnyOriginalInt32(slot, ticket), self, first, second, third); break;
-                case 5: handle.VoidInt32TripleCallback!(new BunnyOriginalVoid(slot, ticket), self, first, second, third); break;
+                case BunnyExtendedHookModes.Int32Zero: returnedValue = handle.Int32ZeroCallback!(new BunnyOriginalInt32(slot, ticket), self); break;
+                case BunnyExtendedHookModes.VoidInt32: handle.VoidInt32Callback!(new BunnyOriginalVoid(slot, ticket), self, first); break;
+                case BunnyExtendedHookModes.VoidInt32Pair: handle.VoidInt32PairCallback!(new BunnyOriginalVoid(slot, ticket), self, first, second); break;
+                case BunnyExtendedHookModes.Int32Triple: returnedValue = handle.Int32TripleCallback!(new BunnyOriginalInt32(slot, ticket), self, first, second, third); break;
+                case BunnyExtendedHookModes.VoidInt32Triple: handle.VoidInt32TripleCallback!(new BunnyOriginalVoid(slot, ticket), self, first, second, third); break;
             }
             Calls++;
             success = 1;
@@ -538,6 +581,9 @@ public static class BunnyHooks
 
     [DllImport("bunny", EntryPoint = "bunny_universal_hook_stat", CallingConvention = CallingConvention.Cdecl)]
     private static extern long NativeStat(int key);
+    [DllImport("bunny", EntryPoint = "bunny_universal_hook_install_stage", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int NativeInstallSystemStage(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int slot);
     [DllImport("bunny", EntryPoint = "bunny_universal_hook_install", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeInstall([MarshalAs(UnmanagedType.LPUTF8Str)] string type,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string method, int slot, int isStatic);
@@ -564,6 +610,7 @@ public static class BunnyUniversalHookDispatcher
     {
         public string Id = "";
         public string Path = "";
+        public BunnyModAssemblyLease? Lease;
         public readonly BunnyHookScope Scope = new();
         public readonly List<BunnyHookModule> Modules = new();
     }
@@ -579,7 +626,9 @@ public static class BunnyUniversalHookDispatcher
         var context = new Context { Id = id, Path = path };
         try
         {
-            Type[] types = Assembly.LoadFrom(path).GetTypes().Where(type =>
+            context.Lease = BunnyModAssemblyRegistry.Acquire(id, path);
+            Assembly loaded = context.Lease.Assembly;
+            Type[] types = loaded.GetTypes().Where(type =>
                 !type.IsAbstract && typeof(BunnyHookModule).IsAssignableFrom(type))
                 .OrderBy(type => type.FullName, StringComparer.Ordinal).ToArray();
             foreach (Type type in types)
@@ -616,12 +665,27 @@ public static class BunnyUniversalHookDispatcher
 
     private static void Close(Context context)
     {
+        try { BunnyWorldUpdateRegistry.DetachScope(context.Scope); }
+        catch (Exception error) { LastError = context.Id + ": world teardown: " + error.Message; }
         context.Scope.Dispose();
         foreach (BunnyHookModule module in context.Modules)
             try { module.Unload(); }
             catch (Exception error) { LastError = context.Id + ": " + error.Message; }
         context.Modules.Clear();
+        context.Lease?.Dispose();
+        context.Lease = null;
     }
+    public static bool Unload(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return false;
+        int index = Contexts.FindIndex(context => context.Id == id);
+        if (index < 0) return false;
+        Context context = Contexts[index];
+        Contexts.RemoveAt(index);
+        Close(context);
+        return true;
+    }
+
     public static void UnloadAll()
     {
         foreach (Context context in Contexts) Close(context);

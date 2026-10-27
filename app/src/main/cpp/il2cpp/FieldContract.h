@@ -1,6 +1,7 @@
 #pragma once
 #include "il2cpp/Api.h"
 #include "il2cpp/Resolver.h"
+#include "il2cpp/NativePointerContract.h"
 #include <cstring>
 #include <string>
 #include <limits>
@@ -61,14 +62,80 @@ inline bool readNativeId(Il2CppClass* owner,const char* name,int* result,std::st
     *error="Field="+std::string(name)+" Expected=IntegerId Actual="+(actual?actual:"Missing")+" Reason=NativeIdTypeMismatch";return false;
 }
 
-inline bool nativeArrayContract(Il2CppArray* array,const char* element,size_t width,uintptr_t maximum=100000) {
+inline const char* nativeArrayContractIssue(Il2CppArray* array,const char* element,size_t width,uintptr_t maximum=100000,Il2CppClass* declaredClass=nullptr) {
+    if(!nativeManagedPointerPlausible(array))return "InvalidArrayPointer";
+    if(!nativeManagedPointerPlausible(array->obj.klass))return "InvalidArrayClassPointer";
+    if(declaredClass&&array->obj.klass!=declaredClass)return "ArrayRuntimeClassMismatch";
+    if(array->length>maximum)return "ArrayLengthOutOfBounds";
     auto& a=il2cpp::api();
-    if(!array||array->length>maximum||!a.class_get_rank||!a.class_get_element_class||
-       !a.class_value_size||!a.class_is_valuetype||!a.class_get_name||!a.class_get_namespace||
-       a.class_get_rank(array->obj.klass)!=1)return false;
-    auto* cls=a.class_get_element_class(array->obj.klass);uint32_t align=0;
-    const char* ns=cls?a.class_get_namespace(cls):nullptr;const char* name=cls?a.class_get_name(cls):nullptr;
-    return cls&&ns&&name&&std::strcmp(ns,"System")==0&&std::strcmp(name,element)==0&&
-        a.class_is_valuetype(cls)&&a.class_value_size(cls,&align)==static_cast<int>(width);
+    if(!a.class_get_rank||!a.class_get_element_class||!a.class_value_size||
+       !a.class_is_valuetype||!a.class_get_name||!a.class_get_namespace)
+        return "MissingArrayReflectionExports";
+    auto* cls=a.class_get_element_class(array->obj.klass);
+    if(!cls)return "ArrayElementClassMissing";
+    if(!nativeManagedPointerPlausible(cls))return "ArrayElementClassInvalidPointer";
+    const char* ns=a.class_get_namespace(cls);
+    const char* name=a.class_get_name(cls);
+    if(!ns||!name||std::strcmp(ns,"System")||std::strcmp(name,element))
+        return "ArrayElementTypeMismatch";
+    if(!a.class_is_valuetype(cls))return "ArrayElementNotValueType";
+    uint32_t align=0;
+    if(a.class_value_size(cls,&align)!=static_cast<int>(width))
+        return "ArrayElementSizeMismatch";
+    const int rank=a.class_get_rank(array->obj.klass);
+    if(rank!=1) {
+        if(!a.array_class_get||!a.array_length)return "ArrayRankMismatchNoCanonicalExports";
+        if(a.array_class_get(cls,1)!=array->obj.klass)
+            return "ArrayRankMismatchCanonicalClassMismatch";
+        if(array->bounds)return "ArrayBoundsUnexpected";
+        if(a.array_length(array)!=array->length)return "ArrayLengthAbiMismatch";
+    } else if(array->bounds) {
+        return "ArrayBoundsUnexpected";
+    }
+    return nullptr;
+}
+
+inline const char* nativeDeclaredArrayIssue(Il2CppArray* array,const Il2CppType* declaredType,
+                                             const char* expectedType,uintptr_t maximum) {
+    auto& a=il2cpp::api();
+    if(!declaredType||!a.type_get_name||!a.il2cpp_free||
+       !a.class_from_il2cpp_type||!a.class_from_name||!a.array_class_get||
+       !a.array_length||!a.array_element_size||!a.corlibImage)
+        return "MissingDeclaredArrayExports";
+    char* declaredName=a.type_get_name(declaredType);
+    const bool declaredMatches=declaredName&&std::strcmp(declaredName,expectedType)==0;
+    if(declaredName)a.il2cpp_free(declaredName);
+    if(!declaredMatches)return "DeclaredArrayTypeMismatch";
+    const char* elementName=nullptr;
+    size_t width=0;
+    if(std::strcmp(expectedType,"System.Int32[]")==0) {
+        elementName="Int32";
+        width=sizeof(int32_t);
+    } else if(std::strcmp(expectedType,"System.Boolean[]")==0) {
+        elementName="Boolean";
+        width=sizeof(uint8_t);
+    } else {
+        return "UnsupportedPrimitiveArrayType";
+    }
+    Il2CppClass* element=a.class_from_name(a.corlibImage,"System",elementName);
+    if(!nativeManagedPointerPlausible(element))return "InvalidPrimitiveElementClass";
+    Il2CppClass* canonical=a.array_class_get(element,1);
+    Il2CppClass* declared=a.class_from_il2cpp_type(declaredType);
+    if(!nativeManagedPointerPlausible(canonical)||
+       !nativeManagedPointerPlausible(declared))return "InvalidDeclaredArrayClass";
+    if(!nativeManagedPointerPlausible(array))return "InvalidArrayPointer";
+    Il2CppClass* runtimeClass=array->obj.klass;
+    if(!nativeManagedPointerPlausible(runtimeClass))return "InvalidArrayClassPointer";
+    if(runtimeClass!=canonical&&runtimeClass!=declared)
+        return "ArrayUnrecognizedRuntimeClass";
+    if(array->bounds)return "ArrayBoundsUnexpected";
+    if(array->length>maximum)return "ArrayLengthOutOfBounds";
+    if(a.array_length(array)!=array->length)return "ArrayLengthAbiMismatch";
+    if(a.array_element_size(runtimeClass)!=static_cast<int>(width))
+        return "ArrayElementSizeMismatch";
+    return nullptr;
+}
+inline bool nativeArrayContract(Il2CppArray* array,const char* element,size_t width,uintptr_t maximum=100000) {
+    return nativeArrayContractIssue(array,element,width,maximum)==nullptr;
 }
 }

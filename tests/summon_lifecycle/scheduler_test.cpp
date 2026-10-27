@@ -3,7 +3,7 @@
 #include <iostream>
 int main() {
  using namespace bl::csharp;
- g_pinnedStarted=true;g_entityModCount.store(1);g_entityBindings.push_back({"fixture","fixture.dll",{},{{1136,"Minion"}},0,true});
+ g_pinnedStarted=true;g_entityModCount.store(1);g_entityBindings.push_back({"fixture","fixture.dll",{},{{1136,"Minion"}},0,true,true,false,false,false,{},0});
  g_entityProjectileTypeOwner[1136].store(1);g_entityNpcTypeOwner[698].store(1);
  ManagedEntityVelocity result;
  auto tick=[&](bool initial){return tickManagedEntityProjectile(1136,0,1,0,0x1234,10,20,1,0,30,40,&result,initial,-1,0,0);};
@@ -36,6 +36,18 @@ int main() {
  g_recipeRpcQueue.push_back({"fixture","fixture.dll","ExampleWorkbench","",0,0,std::chrono::steady_clock::now()-std::chrono::seconds(1),completion});
  assert(processManagedRecipeRpc(recipeLock,[&](const RecipeRpcJob&){invoked=true;return std::string("0");}));assert(!invoked&&!completion->done);
  assert(!processManagedRecipeRpc(recipeLock,[](const RecipeRpcJob&){return std::string("0");}));
+ recipeLock.unlock();
+ assert(queueManagedShootWarmup("independent","shoot.dll","ExampleShotgun"));
+ assert(queueManagedShootWarmup("independent","shoot.dll","ExampleShotgun")&&g_recipeRpcQueue.size()==1);
+ std::string warmupError;assert(managedShootWarmupState("independent","shoot.dll","ExampleShotgun",&warmupError)==0);
+ recipeLock.lock();
+ assert(processManagedRecipeRpc(recipeLock,[](const RecipeRpcJob& job){assert(job.shooting&&job.kind==2);return std::string("READY");}));
+ recipeLock.unlock();assert(managedShootWarmupState("independent","shoot.dll","ExampleShotgun",&warmupError)==1);
+ assert(queueManagedShootWarmup("independent","bad.dll","ExampleShotgun"));
+ recipeLock.lock();g_recipeRpcQueue.front().deadline=std::chrono::steady_clock::now()-std::chrono::seconds(1);
+ assert(processManagedRecipeRpc(recipeLock,[](const RecipeRpcJob&){assert(false);return std::string();}));
+ recipeLock.unlock();assert(managedShootWarmupState("independent","bad.dll","ExampleShotgun",&warmupError)==-1&&warmupError.find("WarmupDeadlineExceeded")!=std::string::npos);
+ std::cout<<"PRODUCTION_SHOOT_WARMUP_QUEUE_DEDUP_DISPATCH_READINESS_AND_DEADLINE_PASS\n";
  std::cout<<"PRODUCTION_RECIPE_QUEUE_PROCESSOR_COMPLETION_UNLOCK_CANCELLATION_AND_DEADLINE_PASS\n";
  std::cout<<"PRODUCTION_MONOVM_SCHEDULER_FIRST_TICKET_SIX_TICKS_DEDUP_STALE_RESULT_AND_WORLD_PAUSE_PASS\n";
 }

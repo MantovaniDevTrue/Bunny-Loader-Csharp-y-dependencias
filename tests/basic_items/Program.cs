@@ -21,6 +21,13 @@ Check("native-defaults.public-builder-values-and-invalid-input",()=>{
  Reject(()=>defaults.SetId("ammo","ArbitraryClass","Pointer"));Reject(()=>defaults.SetProjectile("shoot","bad/key/again"));
  Equal("mana:i:20",new BunnyNativeDefaults().SetInt("mana",10).SetInt("mana",20).Definition);
 });
+Check("potion.original-drink-particle-colors-managed",()=>{
+ var defaults=new BunnyNativeDefaults().SetItemDrinkParticleColors(
+     new BunnyColor(240,240,240),new BunnyColor(200,200,200),new BunnyColor(140,140,140));
+ Equal("ItemSet_DrinkParticleColors:c:FFF0F0F0,FFC8C8C8,FF8C8C8C",defaults.Definition);
+ Reject(()=>new BunnyNativeDefaults().SetItemDrinkParticleColors());
+ Reject(()=>new BunnyNativeDefaults().SetItemDrinkParticleColors(new BunnyColor[9]));
+});
 Check("sound.immutable-options-paths-and-original-gun",()=>{
  var sound=new BunnySoundStyle("Assets/Sounds/Items/Guns/ExampleGun.ogg",volume:0.9f,pitchVariance:0.2f,maxInstances:3);
  Equal(0.9f,sound.Volume);Equal(0.2f,sound.PitchVariance);Equal(3,sound.MaxInstances);
@@ -30,8 +37,19 @@ Check("sound.immutable-options-paths-and-original-gun",()=>{
  Reject(()=>new BunnySoundStyle("ok.wav",volume:float.NaN));Reject(()=>new BunnySoundStyle("ok.wav",pitch:float.PositiveInfinity));
  Reject(()=>new BunnySoundStyle("ok.wav",maxInstances:-1));Reject(()=>new BunnySoundStyle("ok.wav",limitBehavior:(BunnySoundLimitBehavior)3));
 });
-Check("pickaxe.original-defaults",()=>{var item=new ExamplePickaxe();item.SetDefaults();Equal(220,item.Pick);Equal(20,item.Damage);Equal(6f,item.KnockBack);Equal(10,item.UseTime);Equal(10,item.UseAnimation);Equal(true,item.Melee&&item.AutoReuse);Equal("Item1",item.UseSound);Equal(50000,item.Value);item.AddRecipes();Equal("1,18,mExampleItem:10",item.RecipeDefinitions.Single());});
-Check("hamaxe.original-defaults",()=>{var item=new ExampleHamaxe();item.SetDefaults();Equal(30,item.Axe);Equal(100,item.Hammer);Equal(25,item.Damage);Equal(15,item.UseTime);Equal(15,item.UseAnimation);Equal(50000,item.Value);Equal("Item1",item.UseSound);item.AddRecipes();Equal("1,18,mExampleItem:10",item.RecipeDefinitions.Single());});
+Check("pickaxe.original-defaults",()=>{var item=new ExamplePickaxe();item.SetDefaults();Equal(ItemRarityID.Green,item.Rare);Equal(220,item.Pick);Equal(20,item.Damage);Equal(6f,item.KnockBack);Equal(10,item.UseTime);Equal(10,item.UseAnimation);Equal(true,item.Melee&&item.AutoReuse);Equal("Item1",item.UseSound);Equal(50000,item.Value);item.AddRecipes();Equal("1,18,mExampleItem:10",item.RecipeDefinitions.Single());});
+Check("hamaxe.original-defaults",()=>{var item=new ExampleHamaxe();item.SetDefaults();Equal(ItemRarityID.Green,item.Rare);Equal(30,item.Axe);Equal(100,item.Hammer);Equal(25,item.Damage);Equal(15,item.UseTime);Equal(15,item.UseAnimation);Equal(50000,item.Value);Equal("Item1",item.UseSound);item.AddRecipes();Equal("1,18,mExampleItem:10",item.RecipeDefinitions.Single());});
+Check("rarity.public-tmod-constants-and-symbolic-native-default",()=>{
+ var expected=new Dictionary<string,int>{{"Master",-13},{"Expert",-12},{"Quest",-11},{"Gray",-1},{"White",0},{"Blue",1},{"Green",2},{"Orange",3},{"LightRed",4},{"Pink",5},{"LightPurple",6},{"Lime",7},{"Yellow",8},{"Cyan",9},{"Red",10},{"Purple",11},{"Count",12}};
+ var fields=typeof(ItemRarityID).GetFields(System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.Static);
+ Equal(expected.Count,fields.Length);foreach(var field in fields)Equal(expected[field.Name],(int)field.GetRawConstantValue()!);
+ Equal("rare:d:ItemRarityID:Cyan",new BunnyNativeDefaults().SetId("rare",nameof(ItemRarityID),nameof(ItemRarityID.Cyan)).Definition);
+});
+Check("wasp-nest.original-defaults-and-functional-effect",()=>{
+ var item=new WaspNest();item.SetDefaults();Equal(26,item.Width);Equal(26,item.Height);Equal(true,item.Accessory);
+ Equal(BunnyItem.SellPrice(gold:2),item.Value);Equal(ItemRarityID.Green,item.Rare);
+ Equal("strongBees:set:1",item.Behavior.NativeAccessoryEffectsDefinition);
+});
 Check("material.original-recipe",()=>{var item=new ExampleItem();item.SetDefaults();Equal(9999,item.MaxStack);Equal(100,item.Value);item.AddRecipes();Equal("999,18,v2:10",item.RecipeDefinitions.Single());});
 Check("minion.configurable-movement-and-finite-state",()=>{
  var custom=new BunnyMinionMovement(attackSpeed:16f,attackInertia:1f,followOffsetX:0f,followOffsetY:0f);
@@ -99,14 +117,15 @@ Check("recipe.clone-isolation-and-removal",()=>{
 });
 Check("probe.items-only-full-wire",()=>{
  Directory.CreateDirectory("build/basic-items");string diag="build/basic-items/probe.txt";
- Equal(3,CompiledAssemblyProbe.Verify(Assembly.GetExecutingAssembly().Location,diag));
- var lines=File.ReadAllLines("build/basic-items/source-runtime-values.txt");Equal("BUNNY_MANAGED_DEFAULTS_V2",lines[0]);Equal(4,lines.Length);
- foreach(var line in lines.Skip(1)) {
+ Equal(6,CompiledAssemblyProbe.Verify(Assembly.GetExecutingAssembly().Location,diag));
+ var lines=File.ReadAllLines("build/basic-items/source-runtime-values.txt");Equal("BUNNY_MANAGED_DEFAULTS_V2",lines[0]);Equal(7,lines.Length);
+ foreach(var line in lines.Skip(1).Where(l=>l.StartsWith("ITEM\t"))) {
   var fields=line.Split('\t');
   if(fields[1]=="ExampleItem") {
    Equal(23,fields.Length);
    if(!fields[22].StartsWith("pt-BR:"))throw new Exception("Missing native pt-BR item tooltip");
-  } else Equal(20,fields.Length);
+  } else if(fields[1]=="WaspNest") { Equal(25,fields.Length);Equal("2",fields[6]); }
+  else Equal(20,fields.Length);
  }
  if(!lines.Any(l=>l.Contains("\tItem1\t")))throw new Exception("native sound missing");
 });
@@ -114,7 +133,7 @@ string scratch=Path.Combine(Path.GetTempPath(),"bunny-item-"+Guid.NewGuid().ToSt
 try {
  Directory.CreateDirectory(scratch);string runtime=Path.Combine(scratch,"runtime");Directory.CreateDirectory(runtime);
  string source=Path.GetDirectoryName(typeof(object).Assembly.Location)!;
- foreach(string name in new[]{"System.Private.CoreLib","System.Runtime","netstandard","System.Collections","System.Linq","System.Console","System.Runtime.Extensions","System.ObjectModel","System.Collections.Concurrent","System.Threading","System.Threading.Tasks"})
+ foreach(string name in new[]{"System.Private.CoreLib","System.Runtime","netstandard","System.Collections","System.Linq","System.Console","System.Runtime.Extensions","System.ObjectModel","System.Collections.Concurrent","System.Threading","System.Threading.Tasks","System.Numerics.Vectors"})
   File.Copy(Path.Combine(source,name+".dll"),Path.Combine(runtime,name+".dll"));
  File.Copy(typeof(BunnyItem).Assembly.Location,Path.Combine(runtime,"BunnySourceSdk.dll"));
  Check("projectile.native-tuning-real-compiler-wire-and-invalid-values",()=>{
@@ -128,6 +147,19 @@ try {
    File.WriteAllText(file,source.Replace(mutation.Item1,mutation.Item2));Equal(1,Compiler.Compile(root,output,runtime,diag));Equal(-1,CompiledAssemblyProbe.Verify(output,diag));
    string error=File.ReadAllText(diag);if(!error.Contains("[CSharp][ERROR][ProjectilePolicy]")||!error.Contains("Class=PolicyProjectile")||!error.Contains("Reason=OutOfRange"))throw new Exception(error);
   }
+ });
+ Check("projectile.static-defaults-order-and-override-contract",()=>{
+  string folder=Path.Combine(scratch,"static-projectile");Directory.CreateDirectory(Path.Combine(folder,"content"));
+  string file=Path.Combine(folder,"content","StaticProjectile.cs"),output=Path.Combine(scratch,"static-projectile.dll"),diag=Path.Combine(scratch,"static-projectile.txt");
+  string source="using System;using BunnyLoader.Source;public sealed class StaticProjectile:BunnyProjectile{private int stage;public override void SetDefaults(){Width=7;stage=1;}public override void SetStaticDefaults(){if(stage!=1||Width!=7)throw new InvalidOperationException(\"wrong setup order\");stage=2;NativeDefaults.SetProjectileStaticInt(\"TrailCacheLength\",Width+13);}}";
+  File.WriteAllText(file,source);Equal(1,Compiler.Compile(folder,output,runtime,diag));Equal(1,CompiledAssemblyProbe.Verify(output,diag));
+  Equal(true,File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt")).Contains("NATIVE_PROJECTILE\tStaticProjectile\tProjectileSet_TrailCacheLength:i:20"));
+  File.WriteAllText(file,source.Replace("public override void SetStaticDefaults()","public new void SetStaticDefaults()"));
+  Equal(1,Compiler.Compile(folder,output,runtime,diag));Equal(-1,CompiledAssemblyProbe.Verify(output,diag));
+  Equal(true,File.ReadAllText(diag).Contains("invalid SetStaticDefaults override"));
+  File.WriteAllText(file,source.Replace("stage=2;","throw new InvalidOperationException(\"static callback failed\");"));
+  Equal(1,Compiler.Compile(folder,output,runtime,diag));Equal(-1,CompiledAssemblyProbe.Verify(output,diag));
+  Equal(true,File.ReadAllText(diag).Contains("static callback failed"));
  });
  Check("summon.native-movement-conflicting-ai-and-vanilla-style-rejected",()=>{
   string root=Path.Combine(scratch,"summon-policy");Directory.CreateDirectory(Path.Combine(root,"content"));
@@ -145,8 +177,12 @@ try {
   string output=Path.Combine(scratch,"owned.dll"),diag=Path.Combine(scratch,"owned.txt");
   Equal(1,Compiler.Compile("tests/basic_items/owned_recipe_fixture",output,runtime,diag));
   Equal(5,CompiledAssemblyProbe.Verify(output,diag));
-  var rows=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
-  Equal(9,rows.Length);Equal(3,rows.Count(row=>row.StartsWith("RECIPES\t",StringComparison.Ordinal)));
+  var allRows=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  // Armas e projeteis declaram a classe padrao (Ranged) explicitamente no wire.
+  Equal(true,allRows.Contains("DAMAGE_TYPE\tITEM\tContractWeapon\tV4"));
+  Equal(true,allRows.Contains("DAMAGE_TYPE\tPROJECTILE\tContractBolt\tV4"));
+  var rows=allRows.Where(row=>!row.StartsWith("DAMAGE_TYPE\t",StringComparison.Ordinal)).ToArray();
+  Equal(10,rows.Length);Equal(true,rows.Contains("SHOOT\tContractWeapon\t0"));Equal(3,rows.Count(row=>row.StartsWith("RECIPES\t",StringComparison.Ordinal)));
   foreach(string owner in new[]{"ContractWeapon","ContractAccessory","ContractPotion"}) {
    string Call(int kind,string state)=>BunnyRecipeLoader.Dispatch("owned",output,owner,0,kind,state);
    Equal("READY",Call(3,""));Equal("1",Call(0,"10,100,0,3,9,3,0,0,0"));
@@ -217,37 +253,148 @@ try {
  });
  Check("roslyn.auto-items-only-package",()=>{
   string mod=Path.Combine(scratch,"mod");Directory.CreateDirectory(Path.Combine(mod,"content"));
-  foreach(string path in new[]{"Content/Items/ExampleItem.cs","Content/Items/Tools/ExamplePickaxe.cs","Content/Items/Tools/ExampleHamaxe.cs"})
+  foreach(string path in new[]{"Content/Items/ExampleItem.cs","Content/Items/Tools/ExamplePickaxe.cs","Content/Items/Tools/ExampleHamaxe.cs","Content/Rarities/ExampleModRarity.cs","Content/Rarities/ExampleHigherTierModRarity.cs"})
    File.Copy(Path.Combine("samples/ExampleModCSharp/Playable/content",path),Path.Combine(mod,"content",Path.GetFileName(path)));
   string output=Path.Combine(scratch,"items.dll"),diag=Path.Combine(scratch,"compile.txt");
-  Equal(1,Compiler.Compile(mod,output,runtime,diag));Equal(3,CompiledAssemblyProbe.Verify(output,diag));Equal(2,Compiler.Compile(mod,output,runtime,diag));
+  Equal(1,Compiler.Compile(mod,output,runtime,diag));Equal(5,CompiledAssemblyProbe.Verify(output,diag));Equal(2,Compiler.Compile(mod,output,runtime,diag));
+ });
+ Check("roslyn.tile-animation-native-wire",()=>{
+  string folder=Path.Combine(scratch,"animated-tile");Directory.CreateDirectory(Path.Combine(folder,"content"));
+  File.WriteAllText(Path.Combine(folder,"content","AnimatedExampleTile.cs"),"using BunnyLoader.Source;public sealed class AnimatedExampleTile:BunnyTile{public override void SetStaticDefaults(){Texture=\"Content/Tiles/AnimatedExampleTile.png\";DisplayName=\"Example Animated Tile\";AnimationFrameHeight=36;AnimationFrames=4;AnimationFrameTicks=5;AdjacentTiles=new[]{18,16};AllowBreaking=false;AllowDrops=false;CacheDrawData=false;}public override bool PreDraw(int x,int y)=>x!=3;public override bool CanKillTile(int x,int y){if(x==99)throw new System.InvalidOperationException(\"Independent tile error\");return false;}public override bool CanDrop(int x,int y)=>x<3;public override void HitWire(int x,int y){}public override void RandomUpdate(int x,int y){}public override void AnimateTile(ref int frame,ref int counter){frame=(frame+1)%4;counter=0;}public override void ModifyLight(int x,int y,ref float r,ref float g,ref float b){r=0.2f;g=0.4f;b=0.8f;}public override void NearbyEffects(int x,int y,bool closer){}public override void SetDrawPositions(int x,int y,ref int width,ref int top,ref int height,ref int frameX,ref int frameY){top=-4;frameX+=18;}public override void AnimateIndividualTile(int x,int y,ref int addFrameX,ref int addFrameY){addFrameY+=36;}public override void SetSpriteEffects(int x,int y,ref int effects){effects=1;} }");
+  string assemblyPath=Path.Combine(scratch,"animated-tile.dll"),diagPath=Path.Combine(scratch,"animated-tile.txt");
+  Equal(1,Compiler.Compile(folder,assemblyPath,runtime,diagPath));
+  Equal(1,CompiledAssemblyProbe.Verify(assemblyPath,diagPath));
+  var tileWire=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"))
+   .Single(line=>line.StartsWith("TILE\tAnimatedExampleTile\t",StringComparison.Ordinal)).Split('\t');
+  Equal(29,tileWire.Length);Equal("36",tileWire[13]);Equal("4",tileWire[14]);Equal("5",tileWire[15]);Equal("16,18",tileWire[16]);Equal("0",tileWire[17]);Equal("0",tileWire[18]);Equal("63599",tileWire[19]);Equal("0",tileWire[20]);
+  Equal("READY",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",0,2,""));
+  Equal("0",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",0,0,"3,4"));
+  Equal("1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",1,0,"2,4"));
+  Equal("0",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",1,0,"5,4"));
+  Equal("1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",2,0,"4,4"));
+  Equal("1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",3,0,"4,4"));
+  Equal("0,0",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",12,0,"3,4"));
+  Equal("0",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",5,0,"3,4"));
+  Equal("1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",5,0,"4,4"));
+  Equal("LIGHT|200|400|800",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",6,0,"3,4"));
+  Equal("1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",11,0,"3,4,0"));
+  Equal("1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",11,0,"3,4,1"));
+  Equal("DRAW|18|0|16|16|-4|0|36|1|0",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,
+   "AnimatedExampleTile",13,0,"3,4,0,0,16,16,0,0,0,0,0"));
+  Equal("DRAW|18|0|16|16|-4|0|36|1|1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,
+   "AnimatedExampleTile",13,0,"4,4,0,0,16,16,0,0,0,0,0"));
+  Equal("DRAW|18|0|16|16|-4|0|36|1",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,
+   "AnimatedExampleTile",13,0,"3,4,0,0,16,16,0,0,0,0,1"));
+  if(!BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",13,0,
+    "3,4,0,0,16,16,0,0,0,0,2").StartsWith("ERROR|Stage=DecodeTileDraw",StringComparison.Ordinal))
+    throw new Exception("Invalid draw pass accepted");
+  var callbackError=BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",0,0,"99,4");
+  foreach(string detail in new[]{"Mod=tile-fixture","Class=AnimatedExampleTile","Callback=CanKillTile","Stage=Invoke","System.InvalidOperationException","Independent tile error","CanKillTile("})
+   if(!callbackError.Contains(detail))throw new Exception(callbackError);
+  Equal("0",BunnyTileRuntime.Dispatch("tile-fixture",assemblyPath,"AnimatedExampleTile",0,0,"3,4"));
+ });
+ Check("wall.real-compiler-policy-and-native-helper-overrides",()=>{
+  string folder=Path.Combine(scratch,"wall"),file=Path.Combine(folder,"content","Wall.cs");Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+  File.WriteAllText(file,"using BunnyLoader.Source;namespace Walls {public sealed class IndependentWall:BunnyWall {public override void SetStaticDefaults(){Texture=\"wall.png\";DisplayName=\"Example Independent Wall\";Housing=true;BlendWallName=\"CogWall\";DustName=\"Stone\";FailedDustCount=3;DustCount=10;AnimationFrames=2;AnimationFrameTicks=5;SetFrameDust(0,\"GemEmerald\");RandomizeFrame(0,.75f,1,2);NightLight=new(.1f,.5f,0);AddMapEntry(68,68,68,\"Example Wall\");}}} namespace Items {public sealed class IndependentWall:BunnyItem {public override void SetDefaults(){Texture=\"item.png\";DisplayName=\"Example Independent Wall\";DefaultToPlaceableWall(\"IndependentWall\");Width=0;UseTime=7;AutoReuse=false;}public override void AddRecipes(){CreateRecipe(4).AddIngredient(\"OtherMod/Material\").AddTile(\"OtherMod/Station\").Register();}}}");
+  string output=Path.Combine(folder,"wall.dll"),diag=Path.Combine(folder,"wall.txt");
+  Equal(1,Compiler.Compile(folder,output,runtime,diag));if(CompiledAssemblyProbe.Verify(output,diag)!=2)throw new Exception(File.ReadAllText(diag));
+  var rows=File.ReadAllLines(Path.Combine(folder,"source-runtime-values.txt"));
+  var wall=rows.Single(r=>r.StartsWith("WALL\t")).Split('\t');Equal(16,wall.Length);Equal("3",wall[5]);Equal("10",wall[6]);Equal("2",wall[7]);Equal("5",wall[8]);Equal("0.75",wall[10]);Equal("1,2",wall[11]);Equal("0:GemEmerald",wall[12]);Equal("0.1,0.5,0",wall[14]);
+  var item=rows.Single(r=>r.StartsWith("ITEM\t")).Split('\t');Equal("wmIndependentWall:0:129:4",item[21]);Equal("4,mOtherMod/Station,mOtherMod/Material:1",item[19]);
+  File.Copy(Path.Combine(folder,"source-runtime-values.txt"),"build/basic-items/wall-source-runtime-values.txt",true);
+  Reject(()=>new BunnyWorldLight(float.NaN,0,0));Reject(()=>new BunnyWorldLight(0,-1,0));
  });
  Check("roslyn.full-source-package",()=>{
   string root="samples/ExampleModCSharp/Playable",output=Path.Combine(scratch,"all.dll"),diag=Path.Combine(scratch,"all.txt");
-  Equal(1,Compiler.Compile(root,output,runtime,diag));
+  if(Compiler.Compile(root,output,runtime,diag)!=1)throw new Exception(File.ReadAllText(diag));
   var domains=new Dictionary<Type,string>{
    [typeof(BunnyItem)]="ITEM",[typeof(BunnyWeapon)]="ITEM",[typeof(BunnyAccessory)]="ITEM",[typeof(BunnyBuffPotion)]="ITEM",
-   [typeof(BunnyTile)]="TILE",[typeof(BunnyProjectile)]="PROJECTILE",[typeof(BunnyNPC)]="NPC",
-   [typeof(BunnyBuff)]="BUFF",[typeof(BunnyPlayer)]="PLAYER",[typeof(BunnyPrefix)]="PREFIX"
+   [typeof(BunnyMount)]="MOUNT",[typeof(BunnyWorldSystem)]="WORLD_SYSTEM",[typeof(BunnyWorldUpdateLoader)]="HOOK_MODULE",[typeof(BunnyHookModule)]="HOOK_MODULE",[typeof(BunnyTree)]="TREE",[typeof(BunnyGore)]="GORE",[typeof(BunnyWall)]="WALL",[typeof(BunnyTile)]="TILE",[typeof(BunnyProjectile)]="PROJECTILE",[typeof(BunnyNPC)]="NPC",
+   [typeof(BunnyRarity)]="RARITY",[typeof(BunnyDust)]="DUST",[typeof(BunnyBuff)]="BUFF",[typeof(BunnyPlayer)]="PLAYER",[typeof(BunnyPrefix)]="PREFIX"
   };
   var compiled=Assembly.Load(File.ReadAllBytes(output));
   var identities=compiled.GetTypes().Where(t=>t.IsClass&&!t.IsAbstract&&!t.ContainsGenericParameters)
    .Select(t=>new{type=t,domain=domains.FirstOrDefault(p=>p.Key.IsAssignableFrom(t)).Value})
    .Where(x=>x.domain is not null).Select(x=>x.domain+":"+x.type.Name).ToHashSet(StringComparer.Ordinal);
   if(identities.Count==0)throw new Exception("full package has no content");
-  Equal(identities.Count,CompiledAssemblyProbe.Verify(output,diag));
+  int localizationModules=compiled.GetTypes().Count(t=>t.IsClass&&!t.IsAbstract&&
+   typeof(BunnyLocalizationModule).IsAssignableFrom(t));
+  int commands=compiled.GetTypes().Count(t=>t.IsClass&&!t.IsAbstract&&
+   typeof(BunnyCommand).IsAssignableFrom(t));
+  Equal(4,commands);
+  // DamageClass do mod (ExampleDamageClass) tambem conta como conteudo registrado.
+  int damageClasses=compiled.GetTypes().Count(t=>t.IsClass&&!t.IsAbstract&&
+   typeof(DamageClass).IsAssignableFrom(t));
+  Equal(1,damageClasses);
+  if(CompiledAssemblyProbe.Verify(output,diag,root)!=identities.Count+localizationModules+commands+damageClasses)
+   throw new Exception(File.ReadAllText(diag));
+  var contentKinds=new HashSet<string>{"ITEM","WEAPON","ACCESSORY","POTION","TILE","TREE","GORE","MOUNT","WALL","DUST","RARITY","BUFF","PLAYER","PROJECTILE","NPC","PREFIX"};
+  string localizationUid="68c3115f-62f4-49f2-a56b-388256781d5f";
+  string dynamicWire=BunnyLocalizationRuntime.Dispatch(localizationUid,output,"pt-BR");
+  if(!dynamicWire.StartsWith("OK|",StringComparison.Ordinal)||
+     !dynamicWire.Contains(Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(
+       "Mods."+localizationUid+".Common.Localization.RuntimeGreeting")),StringComparison.Ordinal))
+    throw new Exception("Actual Example localization callback failed with registered UID: "+dynamicWire);
+  Equal(true,BunnyLocalizationRuntime.Unload(localizationUid));
   var actual=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt")).Skip(1)
-   .Where(l=>l.Length>0&&!l.StartsWith("RECIPES\t",StringComparison.Ordinal)&&!l.StartsWith("NATIVE_",StringComparison.Ordinal)&&!l.StartsWith("HOLDOUT\t",StringComparison.Ordinal)&&!l.StartsWith("USE_SOUND\t",StringComparison.Ordinal)).Select(l=>l.Split('\t')).Select(f=>
+   .Where(l=>l.Length>0).Select(l=>l.Split('\t')).Where(f=>contentKinds.Contains(f[0])).Select(f=>
     (f[0] is "WEAPON" or "ACCESSORY" or "POTION"?"ITEM":f[0])+":"+f[1]).ToArray();
-  Equal(identities.Count,actual.Length);
-  if(!identities.SetEquals(actual))throw new Exception("compiled types and native wire identities differ");
+  var nativeIdentities=identities.Where(identity=>contentKinds.Contains(identity.Split(':')[0])).ToHashSet(StringComparer.Ordinal);
+  Equal(nativeIdentities.Count,actual.Length);
+  if(!nativeIdentities.SetEquals(actual))throw new Exception("compiled types and native wire identities differ");
   File.Copy(Path.Combine(scratch,"source-runtime-values.txt"),"build/basic-items/full-source-runtime-values.txt",true);
   var minionRows=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  foreach(string language in new[]{"en-US","pt-BR"}) {
+   using var locale=JsonDocument.Parse(File.ReadAllText(Path.Combine(root,"content","Localization",language+".json")));
+   string expected=locale.RootElement.GetProperty("ArmorSetBonus").GetProperty("ExampleArmor").GetString()!.Replace("{0}","20");
+   string key=Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes("Mods.source.ArmorSetBonus.ExampleArmorDisplay"));
+   string row=minionRows.Single(line=>line.StartsWith("LOCALE\t"+language+"\t"+key+"\t",StringComparison.Ordinal));
+   Equal(expected,System.Text.Encoding.UTF8.GetString(Convert.FromHexString(row.Split('\t')[3])));
+  }
+  Equal(true,minionRows.Contains("ITEM_RARITY\tExampleWand\tExampleModRarity"));
+  foreach(var name in new[]{"ExampleStatAccessory","ExampleItem","ExampleMeleeWeapon","ExampleBuffPotion"})
+    Equal(false,minionRows.Any(row=>row.StartsWith("ITEM_RARITY\t"+name+"\t",StringComparison.Ordinal)));
+  var statAccessory=minionRows.Single(row=>row.StartsWith("ITEM\tExampleStatAccessory\t",StringComparison.Ordinal)).Split('\t');
+  Equal("250000",statAccessory[5]);
+  Equal("2",statAccessory[6]);
+  foreach(string armorName in new[]{"ExampleHelmet","ExampleBreastplate","ExampleLeggings"}) {
+   var values=minionRows.Single(row=>row.StartsWith("ITEM\t"+armorName+"\t",StringComparison.Ordinal)).Split('\t');
+   Equal("18",values[2]);Equal("18",values[3]);Equal("50000",values[5]);Equal("2",values[6]);
+   foreach(string language in new[]{"en-US","pt-BR"}) {
+    using var locale=JsonDocument.Parse(File.ReadAllText(Path.Combine(root,"content","Localization",language+".json")));
+    string expected=locale.RootElement.GetProperty("ItemTooltip").GetProperty(armorName).GetString()!
+      .Replace("\\n","\n").Replace("{0}",armorName=="ExampleBreastplate"?"20":"5").Replace("{1}","1");
+    string actualTooltip=language=="en-US"?System.Text.Encoding.UTF8.GetString(Convert.FromHexString(values[18])):
+      System.Text.Encoding.UTF8.GetString(Convert.FromHexString(values[22].Substring("pt-BR:".Length)));
+    Equal(expected,actualTooltip);
+   }
+   Equal("1,mExampleWorkbench,mExampleItem:1",values[19]);
+   Equal((armorName=="ExampleBreastplate"?6:5).ToString(),values[23]);
+  }
+  var blockRows=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  var blockTile=blockRows.Single(row=>row.StartsWith("TILE\tExampleTile\t",StringComparison.Ordinal)).Split('\t');
+  Equal("19968",blockTile[2]);Equal("0",blockTile[3]);Equal("Stone",blockTile[6]);
+  Equal("0",blockTile[7]);Equal("200",blockTile[8]);Equal("255",blockTile[9]);
+  Equal(29,blockTile.Length);Equal("0",blockTile[13]);Equal("1",blockTile[14]);Equal("0",blockTile[15]);Equal("-",blockTile[16]);Equal("1",blockTile[17]);Equal("1",blockTile[18]);Equal("0",blockTile[19]);Equal("1",blockTile[20]);
+  var blockItem=blockRows.Single(row=>row.StartsWith("ITEM\tExampleTileItem\t",StringComparison.Ordinal)).Split('\t');
+  Equal("12",blockItem[2]);Equal("12",blockItem[3]);
+  Equal("10,18,mExampleItem:1",blockItem[19]);Equal("mExampleTile:0",blockItem[21]);
+
   var minion=minionRows.Single(row=>row.StartsWith("PROJECTILE\tExampleMinion\t",StringComparison.Ordinal)).Split('\t');
   Equal(18,minion.Length);Equal("4",minion[12]);Equal("5",minion[13]);Equal("8",minion[14]);Equal("700",minion[15]);Equal("1",minion[16]);Equal("4,8,12,80,20,10,-48,600,20,0.82,60,2000,40,40,1200,0.05,0.04",minion[17]);
-  Equal(true,minionRows.Contains("RECIPES\tExampleMinionItem\tWEAPON\t1,mExampleWorkbench,mExampleItem:1"));
+  Equal(true,minionRows.Contains("RECIPES\tExampleMinionItem\tWEAPON\t1,18,mExampleItem:1"));
   var sword=minionRows.Single(row=>row.StartsWith("ITEM\tExampleMeleeWeapon\t",StringComparison.Ordinal)).Split('\t');Equal("50000",sword[5]);
   var bulletItem=minionRows.Single(row=>row.StartsWith("ITEM\tExampleBullet\t",StringComparison.Ordinal)).Split('\t');Equal("5000",bulletItem[5]);
+  var tooltipItem=minionRows.Single(row=>row.StartsWith("ITEM\tExampleTooltipItem\t",StringComparison.Ordinal)).Split('\t');
+  Equal(27,tooltipItem.Length);
+  using(var document=JsonDocument.Parse(Convert.FromHexString(tooltipItem[26]))) {
+   var lines=document.RootElement;
+   Equal(3,lines.GetArrayLength());
+   Equal("BunnyLoader",lines[1].GetProperty("name").GetString());
+   Equal("Bunny Loader",lines[1].GetProperty("text").GetString());
+   Equal(true,lines[1].GetProperty("rainbow").GetBoolean());
+   Equal("FFD75A",lines[2].GetProperty("color").GetString());
+  }
   var bullet=minionRows.Single(row=>row.StartsWith("NATIVE_ITEM\tExampleBullet\t",StringComparison.Ordinal));
   Equal(true,bullet.Contains("ammo:d:AmmoID:Bullet")&&bullet.Contains("shoot:p:ExampleBulletProjectile")&&bullet.Contains("shootSpeed:f:4.5"));
   var projectile=minionRows.Single(row=>row.StartsWith("NATIVE_PROJECTILE\tExampleBulletProjectile\t",StringComparison.Ordinal));
@@ -261,11 +408,49 @@ try {
   foreach(var type in compiled.GetTypes().Where(t=>t.IsClass&&!t.IsAbstract&&!t.ContainsGenericParameters&&
       domains.Keys.Any(baseType=>baseType.IsAssignableFrom(t)))) {
     var instance=Activator.CreateInstance(type)??throw new Exception("Cannot instantiate "+type.FullName);
-    var defaults=type.GetMethod(typeof(BunnyTile).IsAssignableFrom(type)?"SetStaticDefaults":"SetDefaults");
+    var defaults=type.GetMethod((typeof(BunnyTile).IsAssignableFrom(type)||typeof(BunnyWall).IsAssignableFrom(type)||typeof(BunnyDust).IsAssignableFrom(type))?"SetStaticDefaults":"SetDefaults");
     defaults?.Invoke(instance,null);
+    // Execute every registered class; translated names may preserve the original Bunny JS localization.
+    if(type.GetProperty("DisplayName")?.GetValue(instance) is string displayName) {
+      bool originalBuffName=false;
+      if(instance is BunnyBuff) {
+        string originalLocale=Path.Combine(root,"content","Localization","en-US.json");
+        using var locale=JsonDocument.Parse(File.ReadAllText(originalLocale));
+        originalBuffName=locale.RootElement.TryGetProperty("BuffName",out var names) &&
+          names.TryGetProperty(type.Name,out var original) &&
+          original.GetString()==displayName;
+      }
+      if(!displayName.StartsWith("Example ",StringComparison.Ordinal) &&
+         !(type.Name=="ExampleTooltipItem" && displayName=="Exemplo de Tooltip") &&
+         !originalBuffName)
+        throw new Exception("Content name must match the source ExampleMod: "+type.FullName+" = "+displayName);
+    }
+    foreach(var name in type.GetCustomAttributes<BunnyNameAttribute>()) {
+      string category=instance is BunnyProjectile?"ProjectileName":"ItemName";
+      string localePath=Path.Combine(root,"content","Localization",name.Culture+".json");
+      bool originalName=false;
+      if(File.Exists(localePath)) {
+        using var locale=JsonDocument.Parse(File.ReadAllText(localePath));
+        originalName=locale.RootElement.TryGetProperty(category,out var names) &&
+          names.TryGetProperty(type.Name,out var original) && original.GetString()==name.Text;
+      }
+      if(!originalName && !name.Text.StartsWith("Example ",StringComparison.Ordinal))
+        throw new Exception("Localized name must preserve the original or begin with Example: "+type.FullName+" = "+name.Text);
+    }
+
     void RequireAsset(string? name) {
       if(!string.IsNullOrWhiteSpace(name))
         assets.Add(new {path=name,className=type.Name,file="ExecutedCSharpDefaults"});
+    }
+    if(instance is BunnyDust dust) {
+      var state=new BunnyDustState{Slot=0,Type=332,Generation=1,Active=1,Scale=1,FrameWidth=8,FrameHeight=8,FrameY=20};
+      dust.OnSpawn(ref state);
+      byte[] png=File.ReadAllBytes(Path.Combine(root,"content",dust.Texture));
+      int textureWidth=System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16,4));
+      int textureHeight=System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20,4));
+      if(state.FrameX<0||state.FrameY<0||state.FrameWidth<=0||state.FrameHeight<=0||
+         state.FrameX+state.FrameWidth>textureWidth||state.FrameY+state.FrameHeight>textureHeight)
+        throw new Exception("Dust OnSpawn frame exceeds original PNG: "+type.Name);
     }
     foreach(var propertyName in new[]{"Texture","VisualTexture"})
       RequireAsset(type.GetProperty(propertyName)?.GetValue(instance) as string);
@@ -323,6 +508,11 @@ try {
   Reject(()=>item.Behavior.Armor.ImmuneTo("not a buff"));
   Reject(()=>item.Behavior.DefineArmorSet(set));
   Reject(()=>new BunnyArmorSet("Head","Body","Legs","invalid\ntext"));
+  Equal(set,set.UseLocalizedText("ArmorSetBonus.ExampleDisplay"));
+  Equal("A2",item.NativeArmorDefinition.Split('|')[0]);
+  Equal("ArmorSetBonus.ExampleDisplay",item.NativeArmorDefinition.Split('|')[9]);
+  foreach(string key in new[]{"",".key","key.","key..value","key|value","key value","key/other",new string('a',73)})
+   Reject(()=>set.UseLocalizedText(key));
  });
  Check("wings.real-source-wire",()=>{
   string root="tests/basic_items/wing_fixture",output=Path.Combine(scratch,"wing.dll"),diag=Path.Combine(scratch,"wing.txt");
@@ -363,11 +553,116 @@ try {
     "using BunnyLoader.Source; namespace Example.Projectiles; public sealed class ExampleWorkbench:BunnyProjectile { public override void SetDefaults(){DisplayName=\"Example Workbench Projectile\";Texture=\"Content/Projectiles/ExampleWorkbench.png\";Width=12;Height=12;AiStyle=1;Friendly=true;Penetrate=1;TimeLeft=240;} }");
   string output=Path.Combine(scratch,"dual-identity.dll"),diag=Path.Combine(scratch,"dual-identity.txt");
   Equal(1,Compiler.Compile(root,output,runtime,diag));Equal(2,CompiledAssemblyProbe.Verify(output,diag));
-  var records=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  var allRecords=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  // O projetil declara a classe padrao (Ranged); o item V0 nao gera linha.
+  Equal(true,allRecords.Contains("DAMAGE_TYPE\tPROJECTILE\tExampleWorkbench\tV4"));
+  Equal(false,allRecords.Any(line=>line.StartsWith("DAMAGE_TYPE\tITEM\t",StringComparison.Ordinal)));
+  var records=allRecords.Where(line=>!line.StartsWith("DAMAGE_TYPE\t",StringComparison.Ordinal)).ToArray();
   Equal(3,records.Length);
   if(!records.Any(line=>line.StartsWith("ITEM\tExampleWorkbench\t")) ||
      !records.Any(line=>line.StartsWith("PROJECTILE\tExampleWorkbench\t")))
       throw new Exception("native domain identity dropped a class");
+ });
+ Check("tree.native-three-texture-source-wire",()=>{
+  string root=Path.Combine(scratch,"tree-source");
+  Directory.CreateDirectory(Path.Combine(root,"content"));
+  string src=Path.Combine(root,"content","TreeProbe.cs");
+  string output=Path.Combine(scratch,"tree.dll"),diag=Path.Combine(scratch,"tree.log");
+  const string valid="using BunnyLoader.Source;public sealed class TreeProbe:BunnyTree{public override void SetDefaults(){"+
+    "Texture=\"Content/Tiles/Plants/ExampleTree\";GrowsOnTile=\"ExampleTile\";SaplingTile=\"ExampleSapling\";WoodItem=\"ExampleItem\";CanDropAcorn=false;LeafGoreName=\"ExampleTree_Leaf\";DustType=6;ShakeItem=\"ExampleTileItem\";ShakeLeaves=false;}}";
+  string goreSrc=Path.Combine(root,"content","ExampleTree_Leaf.cs");
+  File.WriteAllText(goreSrc,"using BunnyLoader.Source;public sealed class ExampleTree_Leaf:BunnyGore{public override void SetDefaults(){Texture=\"Content/Gores/ExampleTree_Leaf\";SpecialAI=3;SafeGore=true;}}");
+  File.WriteAllText(src,valid);
+  Equal(1,Compiler.Compile(root,output,runtime,diag));
+  Equal(2,CompiledAssemblyProbe.Verify(output,diag));
+  string[] rows=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  Equal(3,rows.Length);
+  Equal("GORE\tExampleTree_Leaf\tContent/Gores/ExampleTree_Leaf\t3\t1",rows[1]);
+  Equal("TREE\tTreeProbe\tExampleTile\tExampleSapling\tContent/Tiles/Plants/ExampleTree\tExampleItem\t0\t-1\t6\tExampleTileItem\t0\tExampleTree_Leaf",rows[2]);
+  foreach(string invalid in new[]{"../OtherTree","Content//Trees/Broken","Content/Trees/Leaf.png"}) {
+    File.WriteAllText(src,valid.Replace("Content/Tiles/Plants/ExampleTree",invalid));
+    Equal(1,Compiler.Compile(root,output,runtime,diag));
+    Equal(-1,CompiledAssemblyProbe.Verify(output,diag));
+  }
+ });
+ Check("tree.examplemod-csharp-original-gore-assets-and-types",()=>{
+  const string pc="samples/ExampleMod/content/Content";
+  const string cs="samples/ExampleModCSharp/Playable/content";
+  string[] sprites={"Tiles/Plants/ExampleSapling.png","Tiles/Plants/ExampleTree.png",
+    "Tiles/Plants/ExampleTree_Tops.png","Tiles/Plants/ExampleTree_Branches.png",
+    "Gores/ExampleTree_Leaf.png"};
+  foreach(string sprite in sprites) {
+    string original=Path.Combine(pc,sprite),ported=Path.Combine(cs,"Content",sprite);
+    Equal(true,File.Exists(original));
+    Equal(true,File.Exists(ported));
+    Equal(true,File.ReadAllBytes(original).SequenceEqual(File.ReadAllBytes(ported)));
+  }
+  string project=Path.Combine(scratch,"tree-gore-original");
+  Directory.CreateDirectory(Path.Combine(project,"content"));
+  string[] scripts={"Content/Tiles/Plants/ExampleSapling.cs",
+    "Content/Tiles/Plants/ExampleTree.cs","Content/Gores/ExampleTree_Leaf.cs"};
+  foreach(string path in scripts) {
+    string source=Path.Combine(cs,path);
+    Equal(true,File.Exists(source));
+    File.Copy(source,Path.Combine(project,"content",Path.GetFileName(path)),true);
+  }
+  string output=Path.Combine(scratch,"tree-gore-original.dll");
+  string diag=Path.Combine(scratch,"tree-gore-original.log");
+  Equal(1,Compiler.Compile(project,output,runtime,diag));
+  Equal(3,CompiledAssemblyProbe.Verify(output,diag));
+  string[] wire=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"));
+  Equal(4,wire.Length);
+  Equal(true,wire.Any(row=>row.StartsWith("GORE\tExampleTree_Leaf\tContent/Gores/ExampleTree_Leaf\t3\t1")));
+  Equal(true,wire.Any(row=>row.StartsWith("TREE\tExampleTree\tExampleTile\tExampleSapling\tContent/Tiles/Plants/ExampleTree\t")));
+  Equal(true,wire.Any(row=>row.EndsWith("\tExampleTree_Leaf")));
+  var sapling=wire.Single(row=>row.StartsWith("TILE\tExampleSapling\t",StringComparison.Ordinal)).Split('\t');
+  Equal("32768",sapling[19]);
+  Equal("20",sapling[28]);
+  const string drawing="0,0,16,16,0,0,0,0,0";
+  Equal("READY",BunnyTileRuntime.Dispatch("tree-gore-fidelity",output,"ExampleSapling",0,2,""));
+  Equal("DRAW|0|0|16|16|0|0|0|1",BunnyTileRuntime.Dispatch(
+    "tree-gore-fidelity",output,"ExampleSapling",13,0,"4,20,"+drawing));
+  Equal("DRAW|0|0|16|16|0|0|0|0",BunnyTileRuntime.Dispatch(
+    "tree-gore-fidelity",output,"ExampleSapling",13,0,"5,20,"+drawing));
+ });
+ Check("tiles.sapling-1x2-native-descriptor",()=>{
+  string root=Path.Combine(scratch,"sapling1x2-source");
+  Directory.CreateDirectory(Path.Combine(root,"content"));
+  string source=Path.Combine(root,"content","SaplingProbe.cs");
+  string output=Path.Combine(scratch,"sapling1x2.dll"),diag=Path.Combine(scratch,"sapling1x2.log");
+  File.WriteAllText(source,
+   "using BunnyLoader.Source;public sealed class SaplingProbe:BunnyTile { public override void SetStaticDefaults(){"+
+   "Texture=\"SaplingProbe.png\";DisplayName=\"Sapling\";Shape=BunnyTileShape.Sapling1x2;"+
+   "Flags=BunnyTileFlags.FrameImportant|BunnyTileFlags.NoAttach|BunnyTileFlags.LavaDeath|"+
+   "BunnyTileFlags.TreeSapling|BunnyTileFlags.CommonSapling|BunnyTileFlags.SwaysInWindBasic;"+
+   "SaplingGroundTile=\"ExampleTile\";SaplingVanillaGroundTile=8;SaplingStyleRange=3;"+
+   "AdjacentTiles=new[]{20};}}");
+  Equal(1,Compiler.Compile(root,output,runtime,diag));
+  Equal(1,CompiledAssemblyProbe.Verify(output,diag));
+  var fields=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"))
+   .Single(x=>x.StartsWith("TILE\tSaplingProbe\t",StringComparison.Ordinal)).Split('\t');
+  Equal(29,fields.Length);Equal("4",fields[3]);Equal("ExampleTile",fields[25]);
+  Equal("8",fields[26]);Equal("3",fields[27]);
+  Equal((16|4|8|131072|262144|524288).ToString(),fields[2]);
+  Equal("20",fields[16]);
+  File.WriteAllText(source,
+   "using BunnyLoader.Source;public sealed class SaplingProbe:BunnyTile { public override void SetStaticDefaults(){"+
+   "Shape=BunnyTileShape.Sapling1x2;Flags=BunnyTileFlags.TreeSapling|"+
+   "BunnyTileFlags.CommonSapling|BunnyTileFlags.SwaysInWindBasic;}}");
+  Equal(1,Compiler.Compile(root,output,runtime,diag));
+  Equal(-1,CompiledAssemblyProbe.Verify(output,diag));
+ });
+ Check("tiles.unknown-flags-rejected-by-real-compiler-probe",()=>{
+  string root=Path.Combine(scratch,"bad-tile-flags");Directory.CreateDirectory(Path.Combine(root,"content"));
+  string output=Path.Combine(scratch,"bad-tile.dll"),diag=Path.Combine(scratch,"bad-tile.txt");
+  foreach(int flags in new[]{-1,1048576,int.MaxValue}) {
+   File.WriteAllText(Path.Combine(root,"content","InvalidTile.cs"),
+    "using BunnyLoader.Source;public sealed class InvalidTile:BunnyTile{public override void SetStaticDefaults(){Texture=\"InvalidTile.png\";DisplayName=\"Example Invalid\";Flags=(BunnyTileFlags)("+flags+");}}");
+   Equal(1,Compiler.Compile(root,output,runtime,diag));Equal(-1,CompiledAssemblyProbe.Verify(output,diag));
+   string error=File.ReadAllText(diag);
+   foreach(string detail in new[]{"Class=InvalidTile","Field=Flags","Stage=Serialize","Expected=Int32:KnownMask0xFFFFF","Actual="+flags,"Reason=UnknownFlagBits"})
+    if(!error.Contains(detail))throw new Exception("Missing tile diagnostic: "+detail+" in "+error);
+  }
  });
  Check("tiles.original-bench-and-item-same-name-wire",()=>{
   string root="tests/basic_items/tile_fixture";
@@ -380,7 +675,7 @@ try {
   Equal("ExampleItem",exampleMaterial[1]);
   var tile=rows.Single(row=>row.StartsWith("TILE\tExampleWorkbench\t")).Split('\t');
   var item=rows.Single(row=>row.StartsWith("ITEM\tExampleWorkbench\t")).Split('\t');
-  Equal(13,tile.Length); Equal("1",tile[3]);Equal("18",tile[4]);Equal("18",tile[5]);
+  Equal(29,tile.Length);Equal("1",tile[20]); Equal("1",tile[3]);Equal("18",tile[4]);Equal("18",tile[5]);
   Equal("Platinum",tile[6]);Equal("200",tile[7]);Equal("200",tile[8]);Equal("200",tile[9]);
   Equal("1",tile[11]);Equal("3",tile[12]);
   Equal(22,item.Length);Equal("mExampleWorkbench:0",item[21]);
@@ -422,6 +717,38 @@ try {
   var fields=lines[1].Split('\t');
   Equal("ITEM",fields[0]);Equal("BareArmor",fields[1]);Equal(24,fields.Length);
   Equal("-",fields[20]);Equal("-",fields[21]);Equal("-",fields[22]);Equal("7",fields[23]);
+ });
+ Check("defense.explicit-zero-and-inherited-clone",()=>{
+  string root=Path.Combine(scratch,"defense-zero");Directory.CreateDirectory(Path.Combine(root,"content"));
+  foreach(bool explicitZero in new[]{false,true}) {
+   File.WriteAllText(Path.Combine(root,"content","CloneArmor.cs"),
+    "using BunnyLoader.Source; public sealed class CloneArmor:BunnyItem { public override void SetDefaults(){DisplayName=\"Clone Armor\";Texture=\"Items/CloneArmor\";Behavior.CloneVanillaDefaults(\"CopperHelmet\");"+(explicitZero?"Defense=0;":"")+"} }");
+   string output=Path.Combine(scratch,explicitZero?"zero.dll":"inherit.dll"),diag=output+".txt";
+   Equal(1,Compiler.Compile(root,output,runtime,diag));Equal(1,CompiledAssemblyProbe.Verify(output,diag));
+   var fields=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt"))[1].Split('\t');
+   Equal(28,fields.Length);Equal("C1|0|0|0|0",fields[27]);
+   Equal(explicitZero?"0":"-",fields[23]);
+  }
+  var fresh=new ExampleItem();Equal(false,fresh.HasDefenseOverride);
+  fresh.Defense=0;Equal(true,fresh.HasDefenseOverride);Equal(0,fresh.Defense);
+ });
+ Check("clone.explicit-defaults-versus-inheritance-real-wire",()=>{
+  string root=Path.Combine(scratch,"clone-reload");Directory.CreateDirectory(Path.Combine(root,"content"));
+  var rows=new List<string>{"BUNNY_CLONE_RELOAD_FIXTURE_V1"};
+  for(int revision=0;revision<3;revision++) {
+   string setters=revision<2?"Behavior.CloneVanillaDefaults(\"SoulofSight\");":"";
+   if(revision==1)setters+="Width=0;Height=0;MaxStack=1;Value=0;Rare=0;Damage=0;Crit=0;UseTime=0;UseAnimation=0;UseStyle=0;Pick=0;Axe=0;Hammer=0;Melee=false;NoMelee=false;AutoReuse=false;UseTurn=false;Consumable=false;Accessory=false;Vanity=false;KnockBack=0;UseSound=\"\";Defense=0;";
+   File.WriteAllText(Path.Combine(root,"content","CloneContract.cs"),
+    "using BunnyLoader.Source;public sealed class CloneContract:BunnyItem {public override void SetDefaults(){DisplayName=\"Clone Contract\";Texture=\"Items/CloneContract\";"+setters+"}}");
+   string output=Path.Combine(scratch,"clone-reload-"+revision+".dll"),diag=output+".txt";
+   Equal(1,Compiler.Compile(root,output,runtime,diag));Equal(1,CompiledAssemblyProbe.Verify(output,diag));
+   string row=File.ReadAllLines(Path.Combine(scratch,"source-runtime-values.txt")).Single(r=>r.StartsWith("ITEM\tCloneContract\t",StringComparison.Ordinal));
+   var fields=row.Split('\t');
+   if(revision<2){Equal(28,fields.Length);Equal(revision==0?"C1|0|0|0|0":"C1|8191|127|1|1",fields[27]);Equal(revision==0?"-":"0",fields[23]);}
+   else Equal(20,fields.Length);
+   rows.Add(row);
+  }
+  File.WriteAllLines("build/basic-items/clone-reload-runtime-values.txt",rows);
  });
  Check("compiler.192-content-classes-and-expanded-wire",()=>{
   string root=Path.Combine(scratch,"capacity");Directory.CreateDirectory(Path.Combine(root,"content"));

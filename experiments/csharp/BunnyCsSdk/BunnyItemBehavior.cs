@@ -18,19 +18,40 @@ public sealed class BunnyItemBehavior
     private readonly List<string> nativeEffects = new();
     public string NativeAccessoryEffectsDefinition => string.Join(";",nativeEffects);
     private string clone = "";
+    internal bool HasVanillaClone => clone.Length!=0;
     private string animation = "null", light = "null", alpha = "null";
     public bool ColorFromPlayerHair { get; set; }
     public bool Robe { get; set; }
     public BunnyArmorEffects Armor { get; } = new();
     private BunnyArmorSet? armorSet;
     /// <summary>Efeitos de peca e conjunto instalados pelo host nativo.</summary>
-    public string NativeArmorDefinition => Armor.Empty&&armorSet is null?"":"A1|"+Armor.WireEffects+"|"+Armor.WireImmunity+"|"+(armorSet?.ToWire()??"-|-|-|-|-|-");
+    public string NativeArmorDefinition => Armor.Empty&&armorSet is null?"":
+        (armorSet is not null && armorSet.LocalizedTextKey.Length != 0 ? "A2|" : "A1|")+
+        Armor.WireEffects+"|"+Armor.WireImmunity+"|"+(armorSet?.ToWire()??"-|-|-|-|-|-");
     private int defense;
     private string wings="null";
+    private string costume="null";
+    public void ConfigureCostume(string alternateTextureStem,string buffName,float jumpSpeedBoost,int extraFall,int requiredTownNpcs=1)
+    {
+        if(!ValidTexture(alternateTextureStem)||!ValidName(buffName)||!float.IsFinite(jumpSpeedBoost)||
+            jumpSpeedBoost<0||jumpSpeedBoost>20||extraFall<0||extraFall>300||
+            requiredTownNpcs<1||requiredTownNpcs>20||costume!="null")
+            throw new ArgumentException("Descritor de traje invalido");
+        costume="{\"alt\":\""+alternateTextureStem+"\",\"buff\":\""+buffName+
+            "\",\"jump\":"+Number(jumpSpeedBoost)+",\"fall\":"+extraFall.ToString(CultureInfo.InvariantCulture)+
+            ",\"town\":"+requiredTownNpcs.ToString(CultureInfo.InvariantCulture)+"}";
+    }
+    private static bool ValidName(string name)=>!string.IsNullOrWhiteSpace(name)&&name.Length<=72&&
+        name.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_');
+    private static bool ValidTexture(string path)=>!string.IsNullOrWhiteSpace(path)&&path.Length<=180&&
+        path[0]!='/'&&path.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_'||c=='-'||c=='/')&&
+        !path.Contains("//")&&!path.EndsWith("/",StringComparison.Ordinal);
+    /// <summary>Distingue defesa explicitamente zero dos defaults herdados do item vanilla.</summary>
+    public bool HasDefenseOverride { get; private set; }
     public int Defense
     {
         get => defense;
-        set { if(value<0||value>1000)throw new ArgumentOutOfRangeException(nameof(value));defense=value; }
+        set { if(value<0||value>1000)throw new ArgumentOutOfRangeException(nameof(value));defense=value;HasDefenseOverride=true; }
     }
     public void DefineArmorSet(BunnyArmorSet set)
     { if(set is null)throw new ArgumentNullException(nameof(set));if(armorSet is not null)throw new InvalidOperationException("Conjunto ja definido");armorSet=set; }
@@ -47,6 +68,11 @@ public sealed class BunnyItemBehavior
         wings="{\"stats\":["+flyTime+","+Number(flySpeed)+","+Number(acceleration)+"],\"vertical\":["+
             string.Join(",",new[]{ascentWhenFalling,ascentWhenRising,maxCanAscendMultiplier,maxAscentMultiplier,constantAscend}.Select(Number))+"]}";
     }
+    /// <summary>
+    /// Declara a cópia nativa de um item vanilla. Atribuições explícitas de BunnyItem
+    /// têm precedência, inclusive zero/false/som vazio. Os getters de autoria não
+    /// consultam os valores vanilla durante a compilação. Veja CLONE_DEFAULTS.md.
+    /// </summary>
     public void CloneVanillaDefaults(string itemIdName)
     { Name(itemIdName); clone=itemIdName; }
     public void EquipTexture(BunnyEquipKind kind,string texture,BunnyEquipDrawFlags flags=BunnyEquipDrawFlags.None)
@@ -90,9 +116,9 @@ public sealed class BunnyItemBehavior
     public void WorldAlpha(byte red,byte green,byte blue,byte opacity) => alpha="["+red+","+green+","+blue+","+opacity+"]";
     internal string ToJson()
     {
-        if(equips.Count==0&&clone.Length==0&&animation=="null"&&light=="null"&&alpha=="null"&&!ColorFromPlayerHair&&!Robe&&wings=="null")return "";
+        if(equips.Count==0&&clone.Length==0&&animation=="null"&&light=="null"&&alpha=="null"&&!ColorFromPlayerHair&&!Robe&&wings=="null"&&costume=="null")return "";
         return "{\"v\":1,\"clone\":\""+clone+"\",\"equips\":["+string.Join(",",equips)+"],\"effects\":["+string.Join(",",effects)+
-            "],\"nativeAccessory\":"+Bool(effects.Count>0)+",\"nativeArmor\":"+Bool(!Armor.Empty||armorSet is not null)+",\"animation\":"+animation+",\"light\":"+light+",\"alpha\":"+alpha+",\"hair\":"+Bool(ColorFromPlayerHair)+",\"robe\":"+Bool(Robe)+",\"defense\":"+defense+",\"armor\":"+Armor.ToJson()+",\"armorSet\":"+(armorSet?.ToJson()??"null")+",\"wings\":"+wings+"}";
+            "],\"nativeAccessory\":"+Bool(effects.Count>0)+",\"nativeArmor\":"+Bool(!Armor.Empty||armorSet is not null)+",\"animation\":"+animation+",\"light\":"+light+",\"alpha\":"+alpha+",\"hair\":"+Bool(ColorFromPlayerHair)+",\"robe\":"+Bool(Robe)+",\"defense\":"+defense+",\"armor\":"+Armor.ToJson()+",\"armorSet\":"+(armorSet?.ToJson()??"null")+",\"wings\":"+wings+",\"costume\":"+costume+"}";
     }
     private static string Number(float n) => n.ToString("R",CultureInfo.InvariantCulture);
     private static string Bool(bool b) => b?"true":"false";

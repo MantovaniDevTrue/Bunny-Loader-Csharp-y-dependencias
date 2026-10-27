@@ -21,6 +21,7 @@ public sealed class ManagedProbeNpc : BunnyNPC
 public sealed class ManagedProbeProjectile : BunnyProjectile
 {
     public static int Spawns, Despawns, Hits, Calls, Kills, SeenTarget = -1;
+    public static float LastHitX, LastHitY, LastKillX, LastKillY;
     public override void SetDefaults() { }
 
     public override void OnSpawn(ref BunnyProjectileAiState state) => Spawns++;
@@ -32,8 +33,17 @@ public sealed class ManagedProbeProjectile : BunnyProjectile
         return true;
     }
     public override void OnHitNPC(ref BunnyProjectileAiState state, int npcIndex, int damage)
-        => Hits += npcIndex + damage;
-    public override void OnKill(ref BunnyProjectileAiState state) => Kills++;
+    {
+        Hits += npcIndex + damage;
+        LastHitX = state.X;
+        LastHitY = state.Y;
+    }
+    public override void OnKill(ref BunnyProjectileAiState state)
+    {
+        Kills++;
+        LastKillX = state.X;
+        LastKillY = state.Y;
+    }
     public override void OnDespawn(ref BunnyProjectileAiState state) => Despawns++;
 }
 
@@ -48,6 +58,14 @@ public sealed class BrokenManagedNpc : BunnyNPC
         if (ShouldThrow) throw new InvalidOperationException("expected AI failure");
         state.VelocityX = 2;
         return true;
+    }
+}
+
+public sealed class ManagedProbeDust : BunnyDust
+{
+    public override void SetStaticDefaults()
+    {
+        Texture = "Content/Effects/TrailblazerSpark.png";
     }
 }
 
@@ -70,6 +88,14 @@ public static class Program
         int second = BunnyEntitySourceDispatcher.Register("source-mod-b", dll);
         Check(first == 0 && second == 1, "mod registration");
         Check(BunnyEntitySourceDispatcher.Register("source-mod-a", dll) == first, "registration idempotent");
+        var dustResolver = typeof(BunnyDustSourceDispatcher).GetMethod(
+            "ModForAssembly", BindingFlags.NonPublic | BindingFlags.Static);
+        Check(dustResolver?.Invoke(null, new object[] { Assembly.GetExecutingAssembly() }) as string
+              == "source-mod-a", "BunnyDust assembly registered before item use");
+        Check(BunnyDustSourceDispatcher.Register("source-mod-a", dll) == 0,
+            "Dust registration remains idempotent");
+        Check(BunnyDustSourceDispatcher.Register("source-mod-b", dll) == 1,
+            "Second mod Dust registration remains idempotent");
         Check(BunnyEntitySourceDispatcher.Bind(first, 0, 697, nameof(ManagedProbeNpc)), "npc bind");
         Check(BunnyEntitySourceDispatcher.Bind(first, 1, 1136, nameof(ManagedProbeProjectile)), "projectile bind");
         Check(BunnyEntitySourceDispatcher.Bind(second, 0, 698, nameof(ManagedProbeNpc)), "second mod bind");
@@ -117,11 +143,15 @@ public static class Program
         Check(!BunnyEntitySourceDispatcher.HitProjectile(first, 1136, 8, 12, 1, 5, 7), "projectile owner isolation");
         Check(!BunnyEntitySourceDispatcher.HitProjectile(first, 1136, 8, 11, 0, 5, 7), "projectile generation isolation");
         Check(ManagedProbeProjectile.Hits == 12, "projectile hit payload");
+        Check(ManagedProbeProjectile.LastHitX == 100 &&
+              ManagedProbeProjectile.LastHitY == 100, "projectile sound position retained on hit");
         Check(BunnyEntitySourceDispatcher.KillProjectile(first, 1136, 8, 12, 0),
             "projectile native kill event");
         Check(!BunnyEntitySourceDispatcher.KillProjectile(first, 1136, 8, 12, 0),
             "projectile OnKill once per generation");
         Check(ManagedProbeProjectile.Kills == 1, "projectile kill count");
+        Check(ManagedProbeProjectile.LastKillX == 100 &&
+              ManagedProbeProjectile.LastKillY == 100, "projectile position retained on kill");
         Check(!BunnyEntitySourceDispatcher.HitProjectile(first, 1136, 8, 12, 0, 5, 7),
             "projectile hit after kill quarantined");
         Check(BunnyEntitySourceDispatcher.TickProjectile(first, 1136, 8, 12, 1,

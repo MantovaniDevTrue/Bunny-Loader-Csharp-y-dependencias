@@ -11,22 +11,34 @@ inline std::string_view sourceContentDomain(std::string_view base) {
     if (base == "BunnyBuff") return "BUFF";
     if (base == "BunnyNPC") return "NPC";
     if (base == "BunnyPrefix") return "PREFIX";
+    if (base == "BunnyRarity") return "RARITY";
     if (base == "BunnyPlayer") return "PLAYER";
     if (base == "BunnyTile") return "TILE";
+    if (base == "BunnyWall") return "WALL";
+    if (base == "BunnyDust") return "DUST";
+    if (base == "BunnyTree") return "TREE";
+    if (base == "BunnyGore") return "GORE";
+    if (base == "BunnyMount") return "MOUNT";
     if (base == "BunnyScreenEffect") return "SCREEN_EFFECT";
+    if (base == "BunnyCommand") return "COMMAND";
+    if (base == "BunnyWorldSystem") return "SYSTEM";
+    if (base == "BunnyWorldUpdateLoader" || base == "BunnyHookModule") return "HOOK_MODULE";
+    if (base == "DamageClass") return "DAMAGE_CLASS";
     return {};
 }
 
 
 inline bool sourceRequiresNativeRegistration(std::string_view base) {
-    return base != "BunnyPlayer" && base != "BunnyScreenEffect";
+    return base != "BunnyPlayer" && base != "BunnyScreenEffect" &&
+           base != "BunnyCommand" && base != "BunnyWorldSystem" && base != "BunnyTree" && base != "BunnyGore" && base != "BunnyWorldUpdateLoader" && base != "BunnyHookModule" &&
+           base != "DamageClass";
 }
 
 inline std::string_view sourceWireDomain(std::string_view kind) {
     if (kind == "WEAPON" || kind == "ACCESSORY" || kind == "POTION") return "ITEM";
     if (kind == "ITEM" || kind == "PROJECTILE" || kind == "BUFF" ||
-        kind == "NPC" || kind == "PREFIX" || kind == "PLAYER" ||
-        kind == "TILE") return kind;
+        kind == "NPC" || kind == "PREFIX" || kind == "RARITY" || kind == "PLAYER" ||
+        kind == "TILE" || kind == "WALL" || kind == "DUST" || kind == "TREE" || kind == "GORE" || kind == "MOUNT") return kind;
     return {};
 }
 

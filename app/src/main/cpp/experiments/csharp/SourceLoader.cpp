@@ -1,20 +1,46 @@
 #include "experiments/csharp/SourceLimits.h"
+#include "experiments/csharp/NativeTileWirePolicy.h"
+#include "experiments/csharp/NativeTilePolicy.h"
+#include "experiments/csharp/NativeTileMiningPolicy.h"
+#include "experiments/csharp/NativeSaplingGrowthPolicy.h"
+#include "experiments/csharp/NativeTreeTexturePolicy.h"
+#include "experiments/csharp/NativeTreeEffectsPolicy.h"
+#include "experiments/csharp/ManagedGoreDiscovery.h"
+#include "experiments/csharp/ManagedGoreRuntime.h"
 #include "experiments/csharp/SourceLoader.h"
+#include "experiments/csharp/AutoSourceRuntime.h"
+#include "experiments/csharp/NativeDamageTypeRegistry.h"
+#include "experiments/csharp/NativeDamageClassPlayerStats.h"
+#include "experiments/csharp/NativeRarityRegistry.h"
+#include "experiments/csharp/NativeRarityGameplay.h"
+#include "experiments/csharp/ManagedDustContract.h"
 
 #include "experiments/csharp/NativeContent.h"
+#include "experiments/csharp/NativeMountRegistry.h"
 #include "experiments/csharp/NativeDefaults.h"
 #include "experiments/csharp/NativeHoldout.h"
+#include "experiments/csharp/NativeShooting.h"
+#include "experiments/csharp/NativeWallRuntime.h"
+#include "experiments/csharp/NativeLocalizationRuntime.h"
+#include "content/walls/ModWalls.h"
 #include "content/projectiles/ModProjectiles.h"
 #include "graphics/CSharpScreenEffects.h"
 #include "experiments/csharp/NativeBasicItems.h"
+#include "experiments/csharp/NativeItemPolicies.h"
+#include "experiments/csharp/NativeArmorPolicies.h"
+#include "experiments/csharp/NativeAnglerQuestRegistry.h"
+#include "experiments/csharp/NativeRecipeCallbacks.h"
+#include "experiments/csharp/ManagedRuntime.h"
 #include "content/buffs/ModBuffs.h"
 #include "content/tiles/ModTiles.h"
+#include "content/dusts/ModDusts.h"
 #include "content/items/ModItems.h"
 #include "content/items/ModPrefixes.h"
 #include "experiments/csharp/ManagedPrefixBridge.h"
 #include "content/npcs/ModNpcs.h"
 #include "experiments/csharp/SourceParser.h"
 #include "experiments/csharp/SourceContentIdentity.h"
+#include "experiments/csharp/SourceContentKinds.generated.h"
 #include "core/Log.h"
 #include "mods/ModLoader.h"
 
@@ -30,6 +56,7 @@
 #include <iterator>
 #include <map>
 #include <sstream>
+#include <set>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -117,12 +144,14 @@ bool fields(const ParsedSourceType& type, NativeContentSpec* spec,
     const bool projectile = type.base == "BunnyProjectile";
     const bool basic = type.base == "BunnyItem";
     const bool tile = type.base == "BunnyTile";
+    const bool wall = type.base == "BunnyWall";
     const bool weapon = type.base == "BunnyWeapon";
     const bool buff = type.base == "BunnyBuff";
     const bool potion = type.base == "BunnyBuffPotion";
     const bool accessory = type.base == "BunnyAccessory";
     const bool npc = type.base == "BunnyNPC";
-    if (!basic && !tile && !projectile && !weapon && !buff && !potion && !accessory && !npc) {
+    const bool mount = type.base == "BunnyMount";
+    if (!basic && !tile && !wall && !projectile && !weapon && !buff && !potion && !accessory && !npc && !mount) {
         *error = type.name + ": tipo de conteudo C# desconhecido";
         return false;
     }
@@ -135,10 +164,10 @@ bool fields(const ParsedSourceType& type, NativeContentSpec* spec,
     spec->useTime = npc ? 2 : weapon ? 18 : 0;
     spec->shootType = npc ? 25 : 0;
     spec->shootSpeed = weapon ? 12.f : 0.f;
-    spec->kind = tile ? NativeTile : basic ? NativeBasicItem : projectile ? NativeProjectile :
+    spec->kind = mount ? NativeMount : wall ? NativeWall : tile ? NativeTile : basic ? NativeBasicItem : projectile ? NativeProjectile :
                  weapon ? NativeWeapon : buff ? NativeBuff :
                  accessory ? NativeAccessory : npc ? NativeNpc : NativeBuffPotion;
-    *texture = tile ? "Content/Tiles/" + type.name + ".png" :
+    *texture = wall ? "Content/Walls/" + type.name + ".png" : tile ? "Content/Tiles/" + type.name + ".png" :
                basic ? "Content/Items/" + type.name + ".png" : npc ? "Content/NPCs/" + type.name + ".png" :
                projectile ? "Content/Projectiles/" + type.name + ".png" :
                weapon ? "Content/Items/Weapons/" + type.name + ".png" :
@@ -149,12 +178,13 @@ bool fields(const ParsedSourceType& type, NativeContentSpec* spec,
     for (const auto& [key, value] : type.properties) {
         if (key == "DisplayName") { *display = value; continue; }
         if (key == "Texture") { *texture = value; continue; }
-        if (tile) {
-            *error = type.name + ": BunnyTile permite somente Texture e DisplayName no registro antecipado";
+        if (tile || wall) {
+            *error = type.name + ": "+type.base+" permite somente Texture e DisplayName no registro antecipado";
             return false;
         }
+        if (mount) continue;
         if (basic) {
-            const std::string allowed="|Tooltip|Width|Height|MaxStack|Value|Rare|Defense|Damage|Crit|KnockBack|UseTime|UseAnimation|UseStyle|Melee|NoMelee|AutoReuse|UseTurn|Consumable|Pick|Axe|Hammer|UseSound|";
+            const std::string allowed="|Tooltip|Width|Height|MaxStack|Value|Rare|Defense|Damage|Crit|KnockBack|UseTime|UseAnimation|UseStyle|Melee|NoMelee|AutoReuse|UseTurn|Consumable|Pick|Axe|Hammer|UseSound|SpawnAtCursor|";
             if (allowed.find("|"+key+"|")==std::string::npos) {
                 *error=type.name+": propriedade BunnyItem nao suportada: "+key;return false;
             }
@@ -225,6 +255,7 @@ bool fields(const ParsedSourceType& type, NativeContentSpec* spec,
                 *error = type.name + ": Summon invalido";
                 return false;
             }
+            spec->summon = value == "true";
             continue;
         }
         if (weapon && key == "MinionBuff") {
@@ -274,6 +305,8 @@ bool fields(const ParsedSourceType& type, NativeContentSpec* spec,
             }
             continue;
         }
+        if ((weapon || projectile) && key == "DamageType") continue;
+        if(weapon&&key=="SpawnAtCursor")continue; // Evaluated by the managed verifier; no native side effects during bootstrap.
         int* integerField = nullptr;
         if (projectile && key == "Width") integerField = &spec->width;
         else if (projectile && key == "Height") integerField = &spec->height;
@@ -320,6 +353,13 @@ bool fields(const ParsedSourceType& type, NativeContentSpec* spec,
 
 bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
     const std::string folder = mod.dir + "/content";
+    std::vector<gore::Source> goreSources;
+    if (!gore::discover(mod.dir, &goreSources, &status->error)) {
+        status->error = "[CSharp][ERROR][GoreLoader] Mod=" + mod.id +
+            " Stage=Discover Result=Rejected Detail=" + status->error;
+        return false;
+    }
+    status->goreSourcesDiscovered = static_cast<int>(goreSources.size());
     std::vector<std::string> paths;
     if (!collect(folder, "", &paths, &status->error, 0)) return false;
     if (paths.empty() || paths.size() > kSourceMaxFiles) {
@@ -338,7 +378,8 @@ bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
         totalSourceBytes+=contents.size();
         if(totalSourceBytes>kSourceMaxTotalBytes) {status->error="Fontes excedem 32 MiB";return false;}
         const size_t previousTypes=defs.size();
-        if (!parseCSharpSource(contents, &defs, &status->error, false)) {
+        if (!parseCSharpSource(contents, &defs, &status->error, false,
+                               &status->localizationModules)) {
             status->error = path + ": " + status->error;
             return false;
         }
@@ -357,27 +398,115 @@ bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
     if (defs.size() > kSourceMaxTypes) { status->error = "tipos C# demais"; return false; }
     std::map<std::string, int> typed;
     for (const auto& def : defs) {
-        const std::string key = sourceIdentityForBase(def.base, def.name);
+        const std::string fullName = def.namespaceName.empty()
+            ? def.name : def.namespaceName + "." + def.name;
+        const std::string key = def.base == "BunnyWorldSystem"
+            ? "BunnyWorldSystem:" + fullName
+            : sourceIdentityForBase(def.base, def.name);
         if (key.empty() || !typed.emplace(key, -1).second) {
             status->error = "identidade nativa C# duplicada/invalida: " + key +
                 " namespace=" + def.namespaceName +
                 " fonte=content/" + sourcePaths[key];
             return false;
         }
+        if (def.base == "BunnyWorldUpdateLoader" || def.base == "BunnyHookModule")
+            ++status->hookModules;
+        if (def.base == "BunnyWorldSystem") {
+            status->worldSystemClasses.push_back(fullName);
+            ++status->worldSystems;
+        }
     }
-    if (!prepareNativeContent()) {
+    const bool hasNativeContent = std::any_of(defs.begin(), defs.end(),
+        [](const ParsedSourceType& def) { return sourceRequiresNativeRegistration(def.base); });
+    if (hasNativeContent && !prepareNativeContent()) {
         status->error = "Host API de conteudo nativo indisponivel";
         return false;
     }
     NativeRegisterContext ctx{mod.id, mod.dir, 0, 0};
-    const std::array<std::string, 9> order = {
-        "BunnyTile", "BunnyItem",
-        "BunnyBuff", "BunnyProjectile", "BunnyAccessory",
-        "BunnyNPC", "BunnyBuffPotion", "BunnyWeapon", "BunnyPrefix"
-    };
-    for (const auto& base : order) {
+    std::vector<std::string> registrationOrder(kSourceNativeRegistrationOrder.begin(),
+                                                kSourceNativeRegistrationOrder.end());
+    registrationOrder.push_back("BunnyRarity");
+    for (const auto& base : registrationOrder) {
         for (const auto& def : defs) {
             if (def.base != base) continue;
+            if (base == "BunnyRarity") {
+                if (!def.properties.empty()) {
+                    status->error = def.name + ": BunnyRarity usa callbacks gerenciados, nao propriedades literais";
+                    return false;
+                }
+                const int type = nativeRarities().registerType(mod.id, def.name);
+                if (type < 0) {
+                    status->error = def.name + ": identidade C# de raridade duplicada ou invalida";
+                    return false;
+                }
+                typed[sourceIdentityForBase(def.base, def.name)] = type;
+                ++status->rarities;
+                continue;
+            } else if (base == "BunnyDust") {
+                for (const auto& [key, value] : def.properties) {
+                    if (key != "Texture" && key != "DisplayName") {
+                        status->error = "[CSharp][DustLoader] Class=" + def.name +
+                            " Stage=EarlyRegister Reason=UnsupportedProperty:" + key;
+                        return false;
+                    }
+                }
+                std::string texture;
+                const auto it = def.properties.find("Texture");
+                if (it != def.properties.end()) texture = it->second;
+                if (!texture.empty()) {
+                    if (texture.size() > 240 || texture[0] == '/' ||
+                        texture.find("..") != std::string::npos ||
+                        texture.find(static_cast<char>(92)) != std::string::npos ||
+                        texture.find(':') != std::string::npos ||
+                        texture.find('|') != std::string::npos ||
+                        !texture.ends_with(".png")) {
+                        status->error = def.name + ": textura BunnyDust invalida";
+                        return false;
+                    }
+                    for (unsigned char ch : texture) {
+                        if (ch < 32 || ch == 127) {
+                            status->error = def.name + ": caractere invalido em textura BunnyDust";
+                            return false;
+                        }
+                    }
+                    const std::string asset = mod.dir + "/content/" + texture;
+                    struct stat st{};
+                    if (stat(asset.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
+                        status->error = def.name + ": asset BunnyDust nao encontrado: " + texture;
+                        return false;
+                    }
+                    texture = asset;
+                }
+                bl::runtime::ModDustDef dust;
+                dust.mod = mod.id;
+                dust.name = def.name;
+                dust.texture = std::move(texture);
+                dust.hooks = 0;
+                const int type = bl::runtime::registerModDust(std::move(dust));
+                if (type < 0) {
+                    status->error = def.name + ": falha ao reservar BunnyDust";
+                    return false;
+                }
+                typed[sourceIdentityForBase(def.base, def.name)] = type;
+                status->dustTextures[def.name] = it == def.properties.end() ? "" : it->second;
+                ++status->dusts;
+                continue;
+            }
+            if(base=="BunnyMount") {
+                if(def.name.empty()||def.name.size()>72) {
+                    status->error="Invalid BunnyMount class identity";return false;
+                }
+                std::string reason;
+                const int type=reserveNativeMount(mod.id,def.name,&reason);
+                if(type<0) {
+                    status->error="[CSharp][Mount] Class="+def.name+
+                        " Stage=Reserve Result=Rejected Detail="+reason;
+                    return false;
+                }
+                typed[sourceIdentityForBase(def.base,def.name)]=type;
+                ++status->mounts;
+                continue;
+            }
             if (base == "BunnyPrefix") {
                 for (const auto& [key, value] : def.properties)
                     if (key != "DisplayName" && key != "Category" &&
@@ -459,19 +588,36 @@ bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
     for (const auto& def : defs) {
         if (def.base != "BunnyPlayer") continue;
         const auto link = def.properties.find("Accessory");
-        if (link == def.properties.end()) {
-            if (!def.properties.empty()) {
-                status->error = def.name + ": BunnyPlayer global deve ter SetDefaults vazio";
-                return false;
+        bool validFishing = true;
+        bool hasFishingName = false;
+        bool hasFishingRules = false;
+        for(const auto& [property,value]:def.properties) {
+            if(property=="Accessory")continue;
+            if(property=="FishingQuestFishName") {
+                hasFishingName=!value.empty();
+                continue;
             }
-        } else {
+            if(property=="FishingCatchRules") {
+                hasFishingRules=true;
+                validFishing=validFishing &&
+                    (value=="None"||value=="InvertedGravity"||
+                     value=="Uncommon"||value=="InvertedGravityAndUncommon");
+                continue;
+            }
+            validFishing=false;
+        }
+        if(!validFishing||(hasFishingRules&&!hasFishingName)) {
+            status->error=def.name+": propriedades BunnyPlayer nao suportadas para pesca";
+            return false;
+        }
+        if (link != def.properties.end()) {
             bool valid = false;
             for (const auto& other : defs)
                 if (other.base == "BunnyAccessory" && other.name == link->second &&
                     typed.contains(sourceIdentityForBase("BunnyAccessory", link->second)) &&
                     typed[sourceIdentityForBase("BunnyAccessory", link->second)] >= 0)
                     valid = true;
-            if (!valid || def.properties.size() != 1) {
+            if (!valid) {
                 status->error = def.name + ": acessorio C# inexistente ou propriedades invalidas";
                 return false;
             }
@@ -481,6 +627,8 @@ bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
     for (const auto& def : defs)
         if (!sourceRequiresNativeRegistration(def.base))
             typed.erase(sourceIdentityForBase(def.base, def.name));
+    for (const auto& name : status->worldSystemClasses)
+        typed.erase("BunnyWorldSystem:" + name);
     status->players = static_cast<int>(status->playerClasses.size());
     status->accessories = ctx.accessories;
     status->registeredKindTypes = typed;
@@ -494,7 +642,12 @@ bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
         if (colon != std::string::npos && type >= 0)
             status->registeredTypes.try_emplace(key.substr(colon + 1), type);
     }
+    status->trees = static_cast<int>(std::count_if(defs.begin(),defs.end(),
+        [](const ParsedSourceType& def){return def.base=="BunnyTree";}));
+    status->gores = static_cast<int>(std::count_if(defs.begin(),defs.end(),
+        [](const ParsedSourceType& def){return def.base=="BunnyGore";}));
     status->tiles = ctx.tiles;
+    status->walls = ctx.walls;
     status->items = ctx.items;
     status->projectiles = ctx.projectiles;
     status->buffs = ctx.buffs;
@@ -578,30 +731,117 @@ bool load(const bl::mods::LoadedMod& mod, SourceModStatus* status) {
         screenEffects.push_back(std::move(effect));
     }
     status->screenEffects = static_cast<int>(screenEffects.size());
-    if (status->items+status->tiles+status->projectiles+status->buffs+
-        status->npcs+status->prefixes+status->players+status->screenEffects==0) {
+    for (const auto& def : defs)
+        if (def.base == "BunnyCommand")
+            status->commandClasses.push_back(def.namespaceName.empty() ? def.name :
+                def.namespaceName + "." + def.name);
+    status->commands = static_cast<int>(status->commandClasses.size());
+    for (const auto& def : defs)
+        if (def.base == "DamageClass")
+            status->damageClassNames.push_back(def.namespaceName.empty()
+                ? def.name : def.namespaceName + "." + def.name);
+    status->damageClasses = static_cast<int>(std::count_if(defs.begin(), defs.end(),
+        [](const ParsedSourceType& def) { return def.base == "DamageClass"; }));
+    if (status->damageClasses > 118) {
+        status->error = "DamageClass: limite de 118 classes C# por mod";
+        return false;
+    }
+    if (status->commands > 128) {
+        status->error = "ModCommand: maximo de 128 classes por mod";
+        return false;
+    }
+    if (status->dusts+status->items+status->tiles+status->projectiles+status->buffs+
+        status->npcs+status->prefixes+status->rarities+status->players+status->screenEffects+status->commands+status->trees+status->gores+status->goreSourcesDiscovered+status->worldSystems+status->hookModules+
+        status->damageClasses==0) {
         status->error = "mod C# sem conteudo registrado";
         return false;
     }
     if (!screenEffects.empty() &&
         !bl::graphics::registerCSharpScreenEffects(mod.id, folder, screenEffects, &status->error))
         return false;
+    // Explicit C# declarations publish these PNGs with their settings later.
+    // The implicit PNG catalog must not allocate a second ID for the same name.
+    std::erase_if(goreSources, [&](const gore::Source& source) {
+        return std::any_of(defs.begin(), defs.end(), [&](const ParsedSourceType& def) {
+            return def.base == "BunnyGore" && def.name == source.name;
+        });
+    });
+    status->goreSourcesDiscovered = static_cast<int>(goreSources.size());
+    if (!goreSources.empty() && !gore::stage(mod.id, goreSources, &status->error)) {
+        status->error = "[CSharp][ERROR][GoreLoader] Mod=" + mod.id +
+            " Stage=NativeInstall Result=Rejected Detail=" + status->error;
+        return false;
+    }
     return true;
 }
 
 }
 
+void resetCSharpSourceModSession() {
+    for (const auto& mod : g_statuses) {
+        retireNativeDefaultsForMod(mod.id);
+        retireNativeMounts(mod.id);
+        retireBasicItemTooltipsForMod(mod.id);
+        retireNativeItemPoliciesForMod(mod.id);
+        retireNativeArmorPoliciesForMod(mod.id);
+        retireNativeRaritySampling(mod.id);
+        localization::retireMod(mod.id);
+        shooting::unload(mod.id);
+        nativeDamageTypes().unload(mod.id);
+        damage_combat::classBonuses().unload(mod.id);
+        angler::registry().unload(mod.id);
+        unbindNativeRecipeAssembly(mod.id);
+        invalidateManagedLiveSourceMod(mod.id);
+        invalidateManagedDeferredSourceMod(mod.id);
+    }
+    g_statuses.clear();
+}
+
 bool loadCSharpSourceMod(const bl::mods::LoadedMod& mod) {
+    auto previous = std::find_if(g_statuses.begin(), g_statuses.end(),
+        [&](const SourceModStatus& entry) { return entry.id == mod.id; });
+    if (previous != g_statuses.end()) {
+        retireNativeDefaultsForMod(mod.id);
+        retireNativeMounts(mod.id);
+        retireBasicItemTooltipsForMod(mod.id);
+        retireNativeItemPoliciesForMod(mod.id);
+        retireNativeArmorPoliciesForMod(mod.id);
+        retireNativeRaritySampling(mod.id);
+        localization::retireMod(mod.id);
+        shooting::unload(mod.id);
+        angler::registry().unload(mod.id);
+        unbindNativeRecipeAssembly(mod.id);
+        invalidateManagedLiveSourceMod(mod.id);
+        invalidateManagedDeferredSourceMod(mod.id);
+    }
     SourceModStatus status;
     status.id = mod.id;
     status.directory = mod.dir;
     status.loaded = load(mod, &status);
     if (status.loaded) {
-        BL_INFO("C# source %s: %d arquivo(s), %d item(ns), %d projetil(is), %d buff(s), %d pocao(oes), %d NPC(s)",
+        if (status.goreSourcesDiscovered > 0)
+            BL_INFO("C# GoreLoader %s: %d PNGs registrados em arrays nativos",
+                    mod.id.c_str(), status.goreSourcesDiscovered);
+        BL_INFO("C# source %s: %d arquivo(s), %d item(ns), %d projetil(is), %d buff(s), %d pocao(oes), %d NPC(s), %d Dust(s)",
                 mod.id.c_str(), status.sourceFiles, status.items,
-                status.projectiles, status.buffs, status.potions, status.npcs);
+                status.projectiles, status.buffs, status.potions, status.npcs, status.dusts);
     } else {
+        retireNativeDefaultsForMod(mod.id);
+        retireNativeMounts(mod.id);
+        retireBasicItemTooltipsForMod(mod.id);
+        retireNativeItemPoliciesForMod(mod.id);
+        retireNativeArmorPoliciesForMod(mod.id);
+        retireNativeRaritySampling(mod.id);
+        localization::retireMod(mod.id);
+        shooting::unload(mod.id);
+        angler::registry().unload(mod.id);
+        unbindNativeRecipeAssembly(mod.id);
+        invalidateManagedDeferredSourceMod(mod.id);
         BL_ERROR("C# source %s: %s", mod.id.c_str(), status.error.c_str());
+    }
+    if (previous != g_statuses.end()) {
+        *previous = std::move(status);
+        return previous->loaded;
     }
     g_statuses.push_back(std::move(status));
     return g_statuses.back().loaded;
@@ -626,6 +866,20 @@ bool applyManagedSourceDefaults(
         *error = "Mod fonte nao carregado ou SetDefaults ja aplicado";
         return false;
     }
+    struct DefaultsApplyGuard {
+        const std::string& owner;
+        bool touched=false,complete=false;
+        ~DefaultsApplyGuard(){if(!complete) {
+            if(touched) {
+                retireNativeArmorPoliciesForMod(owner);
+                retireNativeItemPoliciesForMod(owner);
+                retireNativeMounts(owner);
+            }
+            localization::retireMod(owner);
+            angler::registry().unload(owner);
+            retireNativeRaritySampling(owner);
+        }}
+    } defaultsApply{modId};
     std::istringstream lines(runtimeValues);
     std::string header;
     if (!std::getline(lines, header) || header != "BUNNY_MANAGED_DEFAULTS_V2") {
@@ -637,11 +891,23 @@ bool applyManagedSourceDefaults(
     std::map<std::string, int> buffsByName;
     std::map<std::string, bool> seen;
     std::vector<ManagedTileEntry> tiles;
+    std::vector<walls::Definition> wallDefinitions;
+    int dustRows = 0;
     std::vector<ManagedProjectileEntry> projectiles;
     std::vector<ManagedWeaponEntry> weapons;
     std::vector<BasicItemEntry> basicItems;
+    std::vector<angler::Quest> anglerQuests;
+    std::map<std::string, bool> anglerPlayerRules;
+    std::vector<ManagedTreeEntry> trees;
+    std::vector<ManagedMountEntry> mounts;
+    std::vector<std::pair<std::string,std::string>> mountItems;
+    std::vector<ManagedGoreEntry> gores;
     std::vector<NativeDefaultsRequest> nativeDefaults;
+    std::vector<NativeDamageTypeBinding> damageTypes;
+    std::set<std::string> seenDamageTypes;
+    std::vector<damage_combat::ClassBonusRow> classBonusRows;
     std::vector<holdout::Entry> holdouts;
+    std::vector<shooting::Entry> shooting;
     std::vector<useSounds::Entry> useSounds;
     std::vector<ManagedBuffEntry> buffs;
     std::vector<ManagedPotionEntry> potions;
@@ -649,6 +915,12 @@ bool applyManagedSourceDefaults(
     std::vector<ManagedPlayerEntry> players;
     std::vector<ManagedNpcEntry> npcs;
     std::vector<ManagedPrefixEntry> prefixes;
+    std::vector<localization::Entry> localized;
+    std::set<std::string> seenLocale;
+    bool seenLocalizationModules = false;
+    bool seenLocalizationRuntime = false;
+    size_t rarityCount = 0;
+    std::map<std::string, int> itemRarityOverrides;
     std::vector<SourceRecipeOwner> recipeOwners;
     std::map<std::string,bool> seenRecipeOwners;
     std::map<std::string, int> accessoryTypes;
@@ -660,6 +932,94 @@ bool applyManagedSourceDefaults(
         std::vector<std::string> fields;
         std::string part;
         while (std::getline(parts, part, '\t')) fields.push_back(part);
+        if(fields.size()==3&&fields[0]=="MOUNT") {
+            const auto key=sourceIdentityForWire("MOUNT",fields[1]);
+            const auto type=mod->registeredKindTypes.find(key);
+            const auto base=mod->registeredBases.find(key);
+            ManagedMountEntry mount;
+            if(type==mod->registeredKindTypes.end()||
+               base==mod->registeredBases.end()||base->second!="BunnyMount"||
+               type->second!=nativeMountType(modId,fields[1])||
+               !mount_policy::parse(fields[2],&mount.values)||
+               !seen.emplace(key,true).second) {
+                *error="[CSharp][Mount] Class="+fields[1]+
+                    " Stage=Decode Result=Rejected Reason=InvalidM1OrRegistration";
+                return false;
+            }
+            mount.name=fields[1];mount.type=type->second;
+            mounts.push_back(std::move(mount));
+            continue;
+        }
+        if(fields.size()==3&&fields[0]=="MOUNT_ITEM") {
+            const auto key=sourceIdentityForWire("ITEM",fields[1]);
+            const auto it=mod->registeredKindTypes.find(key);
+            const auto base=mod->registeredBases.find(key);
+            if(it==mod->registeredKindTypes.end()||base==mod->registeredBases.end()||
+               base->second!="BunnyItem"||nativeMountType(modId,fields[2])<0||
+               std::find_if(mountItems.begin(),mountItems.end(),
+                   [&](const auto& x){return x.first==fields[1];})!=mountItems.end()) {
+                *error="[CSharp][Mount] Class="+fields[1]+
+                    " Stage=LinkItem Result=Rejected Reason=UnknownMountOrItem";
+                return false;
+            }
+            mountItems.emplace_back(fields[1],fields[2]);
+            continue;
+        }
+        if(!fields.empty()&&fields[0]=="LOCALE_MODULES") {
+            int count=0;
+            if (seenLocalizationModules || fields.size()!=2 ||
+                !integer(fields[1],&count) || count<1 || count>32) {
+                *error="[CSharp][ERROR][Localization] Stage=Decode Reason=InvalidModuleMarker";
+                return false;
+            }
+            seenLocalizationModules=true;
+            continue;
+        }
+        if(!fields.empty()&&fields[0]=="LOCALE_RUNTIME") {
+            if (seenLocalizationRuntime || fields.size()!=2 || fields[1]!="1") {
+                *error="[CSharp][ERROR][Localization] Stage=Decode Reason=InvalidRuntimeMarker";
+                return false;
+            }
+            seenLocalizationRuntime=true;
+            continue;
+        }
+        if(!fields.empty()&&fields[0]=="LOCALE") {
+            localization::Entry entry;
+            if (!localization::decodeWire(fields,modId,&entry,error))return false;
+            if (!seenLocale.insert(entry.culture+"\t"+entry.key).second ||
+                localized.size() >= 8192u*32u) {
+                *error="[CSharp][ERROR][Localization] Stage=Decode Result=Rejected Reason=DuplicateOrOverflow";
+                return false;
+            }
+            localized.push_back(std::move(entry));
+            continue;
+        }
+        if (!fields.empty() && fields[0] == "ITEM_RARITY") {
+            if (fields.size() != 3) {
+                *error = "[CSharp][ERROR][RarityLoader] Mod=" + modId +
+                    " Stage=DecodeItemRarity Reason=InvalidFieldCount";
+                return false;
+            }
+            const auto itemKey = sourceIdentityForWire("ITEM", fields[1]);
+            const auto item = mod->registeredKindTypes.find(itemKey);
+            const auto base = mod->registeredBases.find(itemKey);
+            const auto rarity = mod->registeredKindTypes.find(sourceIdentityForWire("RARITY", fields[2]));
+            const bool validFamily = base != mod->registeredBases.end() &&
+                (base->second == "BunnyItem" || base->second == "BunnyWeapon" ||
+                 base->second == "BunnyAccessory" || base->second == "BunnyBuffPotion");
+            if (item == mod->registeredKindTypes.end() || !validFamily ||
+                rarity == mod->registeredKindTypes.end() ||
+                nativeRarities().findType(modId, fields[2]) != rarity->second ||
+                rarity->second < NativeRarityRegistry::kVanillaCount ||
+                rarity->second >= NativeRarityRegistry::kVanillaCount +
+                    NativeRarityRegistry::kMaximumCustom ||
+                !itemRarityOverrides.emplace(fields[1], rarity->second).second) {
+                *error = "[CSharp][ERROR][RarityLoader] Mod=" + modId +
+                    " Class=" + fields[1] + " Stage=ResolveItemRarity Reason=UnknownOrDuplicateOwnerOrRarity";
+                return false;
+            }
+            continue;
+        }
         if(!fields.empty()&&fields[0]=="RECIPES") {
             SourceRecipeOwner owner;
             if(!parseSourceRecipeOwner(fields,modId,&owner,error))return false;
@@ -681,6 +1041,121 @@ bool applyManagedSourceDefaults(
             if(recipeOwners.size()>kSourceMaxCategory){*error="[CSharp][ERROR][RecipeLoader] Mod="+modId+" Stage=DecodeOwners Reason=OwnerCapacityExceeded Expected=4096 Actual="+std::to_string(recipeOwners.size());return false;}
             continue;
         }
+        if(!fields.empty()&&fields[0]=="SHOOT") {
+            const auto key=fields.size()>1?sourceIdentityForWire("ITEM",fields[1]):"";
+            const auto target=mod->registeredKindTypes.find(key);int mask=0;
+            if((fields.size()!=3&&fields.size()!=4)||target==mod->registeredKindTypes.end()||!integer(fields[2],&mask)||mask<0||mask>7||(fields.size()==4&&fields[3]!="1")) {
+                *error="[CSharp][ERROR][Shoot] Mod="+modId+" Class="+(fields.size()>1?fields[1]:"<missing>")+" Stage=Decode Expected=RegisteredItemAndCallbackMask0..7 Reason=InvalidShootDescriptor Result=Rejected";return false;
+            }
+            const auto source=mod->sourcePaths.find(key);
+            shooting.push_back({modId,fields[1],source==mod->sourcePaths.end()?"<unavailable>":source->second,"",target->second,mask,fields.size()==4});continue;
+        }
+        if(!fields.empty()&&fields[0]=="QUEST_FISH") {
+            if(fields.size()!=6&&fields.size()!=7) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Stage=Decode Reason=InvalidFieldCount";
+                return false;
+            }
+            const auto key=sourceIdentityForWire("ITEM",fields[1]);
+            const auto owner=mod->registeredKindTypes.find(key);
+            const auto base=mod->registeredBases.find(key);
+            int pre=-1, hard=-1, catchRules=0;
+            if(fields.size()==7&&(!integer(fields[6],&catchRules)||catchRules<0||catchRules>3)) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Class="+fields[1]+
+                    " Stage=Decode Reason=InvalidCatchRules";
+                return false;
+            }
+            std::string description, location;
+            if(owner==mod->registeredKindTypes.end()||base==mod->registeredBases.end()||
+               base->second!="BunnyItem"||!isBasicItem(owner->second)||
+               !integer(fields[2],&pre)||!integer(fields[3],&hard)||
+               (pre!=0&&pre!=1)||(hard!=0&&hard!=1)||
+               !angler::decodeHex(fields[4],&description)||
+               !angler::decodeHex(fields[5],&location)) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Class="+fields[1]+
+                    " Stage=Decode Reason=OwnerOrQuestDescriptorInvalid";
+                return false;
+            }
+            angler::Quest quest{modId,fields[1],owner->second,pre==1,hard==1,
+                                std::move(description),std::move(location),catchRules};
+            if(std::any_of(anglerQuests.begin(),anglerQuests.end(),
+                [&](const angler::Quest& previous) {
+                    return previous.type==quest.type||previous.name==quest.name;
+                })) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Class="+fields[1]+
+                    " Stage=Decode Reason=DuplicateQuest";
+                return false;
+            }
+            if(anglerQuests.size()>=kSourceMaxCategory) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Stage=Decode Reason=CapacityExceeded";
+                return false;
+            }
+            quest.catchEnabled = quest.catchRules != 0;
+            anglerQuests.push_back(std::move(quest));
+            continue;
+        }
+        if(!fields.empty()&&fields[0]=="QUEST_LOCALE") {
+            if(fields.size()!=5 || !angler::validCulture(fields[2])) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+
+                    " Stage=DecodeLocale Reason=InvalidCultureOrFieldCount";
+                return false;
+            }
+            auto quest=std::find_if(anglerQuests.begin(),anglerQuests.end(),
+                [&](const angler::Quest& q) { return q.name==fields[1]; });
+            std::string description, location;
+            if(quest==anglerQuests.end()||
+               !angler::decodeHex(fields[3],&description) ||
+               !angler::decodeHex(fields[4],&location) ||
+               (description.empty()&&location.empty()) ||
+               quest->locales.size()>=8 ||
+               !quest->locales.emplace(fields[2],std::make_pair(
+                    std::move(description),std::move(location))).second) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Class="+fields[1]+
+                    " Stage=DecodeLocale Reason=InvalidTranslationOrDuplicate";
+                return false;
+            }
+            continue;
+        }
+        if(!fields.empty()&&fields[0]=="QUEST_CALLBACK") {
+            int mask=0;
+            if(fields.size()!=3 || !integer(fields[2],&mask) ||
+               mask<1 || mask>3) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+
+                    " Stage=DecodeCallback Reason=InvalidDescriptor";
+                return false;
+            }
+            auto quest=std::find_if(anglerQuests.begin(),anglerQuests.end(),
+                [&](const angler::Quest& entry) { return entry.name==fields[1]; });
+            if(quest==anglerQuests.end() || quest->callbackMask!=0) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+
+                    " Stage=DecodeCallback Reason=InvalidOwnerOrDuplicate";
+                return false;
+            }
+            quest->callbackMask=mask;
+            continue;
+        }
+        if(!fields.empty()&&fields[0]=="QUEST_CATCH") {
+            int rules = -1;
+            if(fields.size()!=4 ||
+               std::find(mod->playerClasses.begin(),mod->playerClasses.end(),
+                         fields.size()>1?fields[1]:"") == mod->playerClasses.end() ||
+               !integer(fields[3],&rules) || rules<0 || rules>3 ||
+               !anglerPlayerRules.emplace(fields[2],true).second) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+
+                    " Stage=ResolveFishingPlayer Reason=InvalidPlayerOrDuplicateCatchRule";
+                return false;
+            }
+            auto quest=std::find_if(anglerQuests.begin(),anglerQuests.end(),
+                [&](const angler::Quest& q) { return q.name==fields[2]; });
+            if(quest==anglerQuests.end() ||
+               (quest->catchRules!=0&&quest->catchRules!=rules)) {
+                *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Class="+fields[1]+
+                    " Stage=ResolveFishingPlayer Reason=QuestFishMissingOrConflictingPolicy";
+                return false;
+            }
+            quest->catchRules=rules;
+            quest->catchEnabled=true;
+            continue;
+        }
         if(!fields.empty()&&fields[0]=="USE_SOUND") {
             useSounds::Entry context;context.mod=modId;context.directory=mod->directory;
             context.name=fields.size()>1?fields[1]:"<missing>";
@@ -700,6 +1175,63 @@ bool applyManagedSourceDefaults(
             const auto source=mod->sourcePaths.find(key);
             holdouts.push_back({modId,fields[1],source==mod->sourcePaths.end()?"<unavailable>":source->second,it->second,x,y});continue;
         }
+        if (fields.size() == 4 && fields[0] == "DAMAGE_TYPE") {
+            const bool projectile = fields[1] == "PROJECTILE";
+            if (fields[1] != "ITEM" && !projectile) {
+                *error = "[CSharp][DamageClass] Unknown content family";
+                return false;
+            }
+            const std::string key = sourceIdentityForWire(fields[1], fields[2]);
+            const auto registered = mod->registeredKindTypes.find(key);
+            const auto base = mod->registeredBases.find(key);
+            const bool family = base != mod->registeredBases.end() &&
+                (projectile ? base->second == "BunnyProjectile" :
+                    (base->second == "BunnyItem" || base->second == "BunnyWeapon"));
+            const std::string& cls = fields[3];
+            const bool vanilla = cls.size() == 2 && cls[0] == 'V' &&
+                cls[1] >= '0' && cls[1] <= '9';
+            const bool custom = cls.starts_with("C:") &&
+                std::find(mod->damageClassNames.begin(), mod->damageClassNames.end(),
+                          cls.substr(2)) != mod->damageClassNames.end();
+            if (registered == mod->registeredKindTypes.end() || !family ||
+                (!vanilla && !custom) || !seenDamageTypes.insert(key).second) {
+                *error = "[CSharp][DamageClass] Mod=" + modId + " Class=" + fields[2] +
+                    " Stage=BindDamageType Result=Rejected Reason=OwnerOrClassIdentityMismatch";
+                return false;
+            }
+            damageTypes.push_back({modId, registered->second, projectile, cls});
+            continue;
+        }
+        if (fields.size() == damage_combat::kClassBonusWireFields && fields[0] == "CLASS_BONUS") {
+            const std::string key = sourceIdentityForWire("ITEM", fields[1]);
+            const auto registered = mod->registeredKindTypes.find(key);
+            const auto base = mod->registeredBases.find(key);
+            const std::string& cls = fields[2];
+            const bool custom = cls.starts_with("C:") &&
+                std::find(mod->damageClassNames.begin(), mod->damageClassNames.end(),
+                          cls.substr(2)) != mod->damageClassNames.end();
+            float v[11]{};
+            bool numbers = true;
+            for (size_t i = 0; i < 11 && numbers; ++i) numbers = real(fields[3 + i], &v[i]);
+            damage_combat::ClassBonus bonus;
+            bonus.damage = {v[0], v[1], v[2], v[3]};
+            bonus.knockback = {v[4], v[5], v[6], v[7]};
+            bonus.crit = v[8];
+            bonus.attackSpeed = v[9];
+            bonus.armorPenetration = v[10];
+            const char* issue = registered == mod->registeredKindTypes.end() ||
+                base == mod->registeredBases.end() || base->second != "BunnyItem" ? "OwnerNotBunnyItem" :
+                !numbers ? "InvalidNumber" :
+                cls.starts_with("C:") && !custom ? "DamageClassNotInMod" :
+                damage_combat::classBonusIssue(cls, bonus);
+            if (issue) {
+                *error = "[CSharp][DamageClass] Mod=" + modId + " Class=" + fields[1] +
+                    " DamageClass=" + cls + " Stage=BindClassBonus Result=Rejected Reason=" + issue;
+                return false;
+            }
+            classBonusRows.push_back({modId, registered->second, cls, bonus});
+            continue;
+        }
         if(fields.size()==3&&(fields[0]=="NATIVE_ITEM"||fields[0]=="NATIVE_PROJECTILE")) {
             const bool projectile=fields[0]=="NATIVE_PROJECTILE";
             const auto key=sourceIdentityForWire(projectile?"PROJECTILE":"ITEM",fields[1]);
@@ -711,13 +1243,146 @@ bool applyManagedSourceDefaults(
             nativeDefaults.push_back({fields[1],modId,source==mod->sourcePaths.end()?"<unavailable>":source->second,fields[2],registered->second,projectile});
             continue;
         }
+        if(fields.size()==5&&fields[0]=="GORE") {
+            const auto key=sourceIdentityForWire("GORE",fields[1]);
+            auto found=mod->registeredBases.find(key);
+            const auto safe=[](const std::string& name) {
+                return !name.empty()&&name.size()<=72&&
+                    std::all_of(name.begin(),name.end(),[](unsigned char c) {
+                        return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||
+                               (c>='0'&&c<='9')||c=='_';
+                    });
+            };
+            int ai=-1;
+            if(found==mod->registeredBases.end()||found->second!="BunnyGore"||
+               !mod->sourcePaths.contains(key)||!seen.emplace(key,true).second||
+               !safe(fields[1])||!tree_texture::validStem(fields[2])||
+               !integer(fields[3],&ai)||ai<0||ai>255||
+               (fields[4]!="0"&&fields[4]!="1")||gores.size()>=256) {
+                *error="[CSharp][GoreLoader] Mod="+modId+" Stage=Decode Result=Rejected";
+                return false;
+            }
+            gores.push_back({fields[1],fields[2],ai,fields[4]=="1"});
+            continue;
+        }
+        if((fields.size()==5||fields.size()==7||fields.size()==9||fields.size()==11||fields.size()==12) && fields[0]=="TREE") {
+            const auto key=sourceIdentityForWire("TREE",fields[1]);
+            const auto declared=mod->registeredBases.find(key);
+            const auto source=mod->sourcePaths.find(key);
+            const auto safeName=[](const std::string& value) {
+                if(value.empty()||value.size()>72)return false;
+                return std::all_of(value.begin(),value.end(),[](unsigned char c) {
+                    return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||
+                           (c>='0'&&c<='9')||c=='_';
+                });
+            };
+            if(declared==mod->registeredBases.end()||declared->second!="BunnyTree"||
+               source==mod->sourcePaths.end()||!seen.emplace(key,true).second||
+               !safeName(fields[1])||!safeName(fields[2])||!safeName(fields[3])||
+               !tree_texture::validStem(fields[4])||
+               (fields.size()>=7&&((fields[6]!="0"&&fields[6]!="1") ||
+                 (fields[5]!="-"&&!safeName(fields[5]))))||
+               (fields.size()>=11&&((fields[10]!="0"&&fields[10]!="1")||
+                 (fields[9]!="-"&&!safeName(fields[9]))))) {
+                *error="[CSharp][TreeLoader] Mod="+modId+" Class="+fields[1]+
+                       " Stage=Decode Result=Rejected Reason=DescriptorOrIdentityInvalid";
+                return false;
+            }
+            ManagedTreeEntry entry{};
+            entry.name=fields[1];entry.groundTile=fields[2];
+            entry.saplingTile=fields[3];entry.texture=fields[4];
+            if(fields.size()>=7) {
+                entry.woodItem=fields[5]=="-"?"":fields[5];
+                entry.canDropAcorn=fields[6]=="1";
+            }
+            if(tree_effect::hasEffectFields(fields.size())) {
+                if(!integer(fields[7],&entry.leafGoreType)||
+                   !integer(fields[8],&entry.dustType)||
+                   entry.leafGoreType< -1||entry.leafGoreType>=32768||
+                   entry.dustType<0||entry.dustType>1999) {
+                    *error="[CSharp][TreeLoader] Mod="+modId+" Class="+fields[1]+
+                           " Stage=DecodeEffects Result=Rejected";
+                    return false;
+                }
+            }
+            if(fields.size()>=11) {
+                entry.shakeItem=fields[9]=="-"?"":fields[9];
+                entry.shakeLeaves=fields[10]=="1";
+            }
+            if(fields.size()==12) {
+                if(fields[11]!="-"&&!safeName(fields[11])) {
+                    *error="[CSharp][TreeLoader] Stage=Decode Reason=InvalidLeafGoreName";
+                    return false;
+                }
+                entry.leafGoreName=fields[11]=="-"?"":fields[11];
+                if(!entry.leafGoreName.empty()&&entry.leafGoreType>=0) {
+                    *error="[CSharp][TreeLoader] Stage=Decode Reason=CompetingLeafGoreRefs";
+                    return false;
+                }
+            }
+            trees.push_back(std::move(entry));
+            if(trees.size()>255) {
+                *error="[CSharp][TreeLoader] Stage=Decode Reason=TreeCapacityExceeded";
+                return false;
+            }
+            continue;
+        }
+        if(fields.size()>1&&fields[0]=="WALL") {
+            const auto key=sourceIdentityForWire("WALL",fields[1]);auto target=mod->registeredKindTypes.find(key);
+            walls::Definition definition;
+            if(target==mod->registeredKindTypes.end()||runtime::modWallTypeByName(modId,fields[1])!=target->second) {
+                *error="[CSharp][ERROR][WallDefaults] Mod="+modId+" Class="+fields[1]+" Stage=ResolveContent Result=Rejected Reason=WallNotRegistered";return false;
+            }
+            auto source=mod->sourcePaths.find(key);const std::string sourcePath=source==mod->sourcePaths.end()?"<unavailable>":source->second;
+            if(!walls::parse(fields,&definition,error)){*error="[CSharp][ERROR][Wall] Mod="+modId+" Class="+fields[1]+" File="+sourcePath+" ContentId="+std::to_string(target->second)+" Stage=Decode Result=Rejected Detail="+*error;return false;}
+            definition.mod=modId;definition.type=target->second;definition.source=sourcePath;
+            if(!seen.emplace(key,true).second){*error="Duplicate WALL: "+fields[1];return false;}
+            wallDefinitions.push_back(std::move(definition));continue;
+        }
         const std::string identity = fields.size() >= 2
             ? sourceIdentityForWire(fields[0], fields[1]) : "";
         if (identity.empty() || !seen.emplace(identity, true).second) {
             *error = "Classe C# duplicada ou registro invalido";
             return false;
         }
-        if (fields[0] == "TILE" && fields.size() == 13) {
+        if (fields[0] == "DUST" && fields.size() == 5) {
+            const auto native = mod->registeredKindTypes.find(identity);
+            const auto source = mod->dustTextures.find(fields[1]);
+            int updateType = -1;
+            int hooks = -1;
+            if (native == mod->registeredKindTypes.end() ||
+                source == mod->dustTextures.end() ||
+                runtime::modDustTypeByName(modId, fields[1]) != native->second ||
+                !integer(fields[2], &updateType) ||
+                !integer(fields[3], &hooks) ||
+                updateType < -1 || updateType >= runtime::kVanillaDustCount ||
+                hooks < 0 || hooks > 31 ||
+                fields[4] != (source->second.empty() ? "-" : source->second)) {
+                *error = "[CSharp][ERROR][DustLoader] Mod=" + modId +
+                    " Class=" + fields[1] +
+                    " Stage=ApplyDefaults Reason=NativeIdentityOrDescriptorMismatch";
+                return false;
+            }
+            if (hooks != 0 && !managedDustCallbacksConnected()) {
+                *error = "[CSharp][ERROR][DustLoader] Mod=" + modId +
+                    " Class=" + fields[1] +
+                    " Stage=BindCallbacks Result=Rejected Reason=MonoDustBridgeNotConnected";
+                return false;
+            }
+            if (!runtime::setModDustManagedHooks(native->second, static_cast<unsigned>(hooks))) {
+                *error = "[CSharp][ERROR][DustLoader] Stage=Publish Reason=NativeHookMaskRejected";
+                return false;
+            }
+            runtime::setModDustUpdateType(native->second, updateType);
+            mod->dustMasks[fields[1]] = static_cast<unsigned>(hooks);
+            ++dustRows;
+            if (dustRows > static_cast<int>(kSourceMaxCategory)) {
+                *error = "[CSharp][ERROR][DustLoader] Stage=Decode Reason=CategoryCapacityExceeded";
+                return false;
+            }
+            continue;
+        }
+        if (fields[0] == "TILE" && tile_wire::supported(fields.size())) {
             const auto it = mod->registeredKindTypes.find(identity);
             if (it == mod->registeredKindTypes.end() ||
                 runtime::modTileTypeByName(modId, fields[1]) != it->second) {
@@ -725,8 +1390,17 @@ bool applyManagedSourceDefaults(
             }
             ManagedTileEntry tile;
             tile.name = fields[1]; tile.type = it->second;
-            if (!integer(fields[2], &tile.flags) ||
-                !integer(fields[3], &tile.shape) ||
+            const bool flagsEncoded = integer(fields[2], &tile.flags);
+            if (!flagsEncoded || tile.flags < 0 || tile.flags > 1048575) {
+                const auto source = mod->sourcePaths.find(identity);
+                *error = "[CSharp][ERROR][TileDefaults] Mod=" + modId + " Class=" + fields[1] +
+                    " File=" + (source == mod->sourcePaths.end() ? "<unavailable>" : source->second) +
+                    " API=BunnyTile.Flags Field=Flags ContentId=" + std::to_string(tile.type) +
+                    " Stage=Decode Expected=Int32:KnownMask0xFFFFF Actual=" + fields[2] +
+                    " Result=Rejected Reason=" + (flagsEncoded ? "UnknownFlagBits" : "InvalidInt32");
+                return false;
+            }
+            if (!integer(fields[3], &tile.shape) ||
                 !integer(fields[4], &tile.coordinateHeight) ||
                 !integer(fields[5], &tile.adjacentTile) ||
                 !integer(fields[7], &tile.mapR) ||
@@ -734,8 +1408,11 @@ bool applyManagedSourceDefaults(
                 !integer(fields[9], &tile.mapB) ||
                 !integer(fields[11], &tile.failDust) ||
                 !integer(fields[12], &tile.normalDust) ||
-                tile.flags < 0 || tile.flags > 511 ||
-                tile.shape < 0 || tile.shape > 1 ||
+                (tile_wire::hasAnimationHeight(fields.size()) && !integer(fields[13], &tile.animationFrameHeight)) ||
+                (tile_wire::hasAnimationPolicy(fields.size()) &&
+                 (!integer(fields[14], &tile.animationFrames) ||
+                  !integer(fields[15], &tile.animationFrameTicks))) ||
+                tile.shape < 0 || tile.shape > 4 ||
                 tile.coordinateHeight != 18 ||
                 tile.adjacentTile < -1 || tile.adjacentTile >= 754 ||
                 tile.mapR < 0 || tile.mapR > 255 ||
@@ -743,6 +1420,12 @@ bool applyManagedSourceDefaults(
                 tile.mapB < 0 || tile.mapB > 255 ||
                 tile.failDust < 0 || tile.failDust > 20 ||
                 tile.normalDust < 0 || tile.normalDust > 20 ||
+                tile.animationFrameHeight < 0 || tile.animationFrameHeight > 4096 ||
+                tile.animationFrames < 1 || tile.animationFrames > 64 ||
+                tile.animationFrameTicks < 0 || tile.animationFrameTicks > 600 ||
+                (tile.animationFrames > 1 &&
+                 (tile.animationFrameHeight == 0 || tile.animationFrameTicks == 0)) ||
+                (tile.animationFrames == 1 && tile.animationFrameTicks != 0) ||
                 fields[6].size() > 72 || fields[10].size() > 160) {
                 *error = fields[1] + ": descritor BunnyTile fora dos limites"; return false;
             }
@@ -760,6 +1443,87 @@ bool applyManagedSourceDefaults(
                     if (left < 0 || right < 0) { *error = "Nome do mapa tile invalido"; return false; }
                     tile.mapName.push_back(static_cast<char>(left * 16 + right));
                 }
+            }
+            if (tile_wire::hasAdjacencies(fields.size()) && fields[16] != "-") {
+                std::istringstream adjacentStream(fields[16]);
+                std::string token;
+                while (std::getline(adjacentStream, token, ',')) {
+                    int alias = -1;
+                    if (!integer(token, &alias) || alias < 0 || alias >= runtime::kVanillaTileCount ||
+                        alias == tile.adjacentTile || tile.adjacentTiles.size() >= 16 ||
+                        std::find(tile.adjacentTiles.begin(), tile.adjacentTiles.end(), alias) != tile.adjacentTiles.end()) {
+                        *error = fields[1] + ": lista AdjacentTiles invalida"; return false;
+                    }
+                    tile.adjacentTiles.push_back(alias);
+                }
+                if (fields[16].empty() || fields[16].back() == ',') {
+                    *error = fields[1] + ": lista AdjacentTiles malformada"; return false;
+                }
+            }
+            if (tile_wire::hasBreakPolicy(fields.size())) {
+                if ((fields[17] != "0" && fields[17] != "1") ||
+                    (fields[18] != "0" && fields[18] != "1")) {
+                    *error = fields[1] + ": flags AllowBreaking/AllowDrops invalidas";
+                    return false;
+                }
+                tile.allowBreaking = fields[17] == "1";
+                tile.allowDrops = fields[18] == "1";
+            }
+            if (tile_wire::hasCallbacks(fields.size()) &&
+                (!integer(fields[19], &tile.callbackMask) || !tile_policy::validCallbackMask(tile.callbackMask))) {
+                *error = fields[1] + ": TileCallbackMask invalido"; return false;
+            }
+            if(tile_wire::hasFrameToggle(fields.size())) {
+                if(!integer(fields[21],&tile.frameToggle)||
+                   tile.frameToggle<0||tile.frameToggle>2||
+                   (tile.frameToggle==1&&tile.shape!=2)||
+                   (tile.frameToggle==2&&tile.shape!=3)) {
+                    *error=fields[1]+": FrameToggle fora dos limites da forma";return false;
+                }
+            }
+            if (tile_wire::hasDrawCachePolicy(fields.size())) {
+                if (fields[20] != "0" && fields[20] != "1") {
+                    *error = fields[1] + ": CacheDrawData deve ser 0 ou 1"; return false;
+                }
+                tile.cacheDrawData = fields[20] == "1";
+            }
+            if (tile_wire::hasRegisteredDrops(fields.size()) &&
+                !tile_drop::parseRules(fields[22], &tile.registeredDrops)) {
+                *error = fields[1] + ": RegisterItemDrop invalido";
+                return false;
+            }
+            if (tile_wire::hasMiningPolicy(fields.size()) &&
+                (!integer(fields[23], &tile.minPick) ||
+                 !real(fields[24], &tile.mineResist) ||
+                 !tile_mining::valid(tile.minPick, tile.mineResist))) {
+                *error = fields[1] + ": MinPick/MineResist invalidos";
+                return false;
+            }
+            if (tile_wire::hasSaplingShape(fields.size())) {
+                tile.saplingGroundTile=fields[25]=="-"?"":fields[25];
+                if (!integer(fields[26],&tile.saplingVanillaGroundTile) ||
+                    !integer(fields[27],&tile.saplingStyleRange)) {
+                    *error=fields[1]+": descriptor Sapling1x2 invalido";return false;
+                }
+            }
+            if (tile_wire::hasSaplingGrowth(fields.size()) &&
+                !integer(fields[28],&tile.saplingGrowthChance)) {
+                *error=fields[1]+": SaplingGrowthChance invalido";return false;
+            }
+            if (tile.shape==4 && !tile_wire::hasSaplingShape(fields.size())) {
+                *error=fields[1]+": Sapling1x2 requer campos de ancora";return false;
+            }
+            if (tile.saplingGroundTile.size()>72 ||
+                !std::all_of(tile.saplingGroundTile.begin(),tile.saplingGroundTile.end(),
+                    [](unsigned char ch){return (ch>='a'&&ch<='z')||
+                        (ch>='A'&&ch<='Z')||(ch>='0'&&ch<='9')||ch=='_';}) ||
+                tile.saplingVanillaGroundTile< -1 || tile.saplingVanillaGroundTile>=754 ||
+                tile.saplingStyleRange<1 || tile.saplingStyleRange>12 ||
+                !tile_growth::valid(tile.shape,tile.saplingGrowthChance) ||
+                (tile.shape==4 && ((tile.flags&(131072|262144|524288))!=(131072|262144|524288) ||
+                    (tile.saplingGroundTile.empty() && tile.saplingVanillaGroundTile<0))) ||
+                (tile.shape!=4 && (!tile.saplingGroundTile.empty() || tile.saplingVanillaGroundTile>=0))) {
+                *error=fields[1]+": ancora de sapling invalida";return false;
             }
             tiles.push_back(std::move(tile));
             if (tiles.size() > kSourceMaxCategory) {
@@ -849,8 +1613,15 @@ bool applyManagedSourceDefaults(
             *error = "Classe C# nao registrada no Terraria: " + fields[1];
             return false;
         }
-        if (fields[0] == "PROJECTILE" && (fields.size() == 8 || fields.size() == 12 || fields.size() == 13 || fields.size() == 14 ||
-                 fields.size() == 16 || fields.size() == 17 || fields.size() == 18)) {
+        if (fields[0] == "RARITY" && fields.size() == 2) {
+            if (nativeRarities().findType(modId, fields[1]) != registered->second) {
+                *error = "[CSharp][ERROR][RarityLoader] Mod=" + modId + " Class=" + fields[1] +
+                    " Stage=BindIdentity Reason=NativeIdMismatch Result=Rejected";
+                return false;
+            }
+            ++rarityCount;
+        } else if (fields[0] == "PROJECTILE" && (fields.size() == 8 || fields.size() == 12 || fields.size() == 13 || fields.size() == 14 ||
+                 fields.size() == 16 || fields.size() == 17 || fields.size() == 18 || fields.size() == 19 || fields.size() == 21 || fields.size() == 22 || fields.size() == 23 || fields.size() == 27)) {
             ManagedProjectileEntry record;
             record.name = fields[1];
             record.type = registered->second;
@@ -898,14 +1669,76 @@ bool applyManagedSourceDefaults(
             if (fields.size() == 14 || fields.size() >= 17) {
                 int contact = 0;
                 const auto& value = fields[fields.size()==14?13:16];
-                if (!integer(value, &contact) || (contact != 0 && contact != 1) || !record.values.minion) {
+                if (!integer(value, &contact) || (contact != 0 && contact != 1) || (contact == 1 && !record.values.minion)) {
                     *error = "MinionContactDamage invalido: " + record.name;
                     return false;
                 }
                 record.values.minionContactDamage = contact == 1;
             }
-            if(fields.size()==18&&!parseSummonMovement(fields[17],&record.values.movement,&detail)) {
+            if((fields.size()==18 || fields.size()==19 || fields.size()==21 ||
+                fields.size()==22 || fields.size()==23 || fields.size()==27) &&
+                fields[17] != "-" && !parseSummonMovement(fields[17],&record.values.movement,&detail)) {
                 *error="[CSharp][ERROR][Summon] Mod="+modId+" Class="+record.name+" Stage=DecodeMovement Result=Rejected "+detail;return false;
+            }
+            if (fields.size() >= 19 &&
+                (!integer(fields[18], &record.values.tileCollisionMode) ||
+                 record.values.tileCollisionMode < (fields.size() >= 23 ? 0 : 1) ||
+                 record.values.tileCollisionMode > 3 ||
+                 !record.values.tileCollide)) {
+                *error = "Contrato OnTileCollide nativo invalido: " + record.name;
+                return false;
+            }
+            if (fields.size() >= 21 &&
+                (!real(fields[19], &record.values.bounceRestitution) ||
+                 !real(fields[20], &record.values.bounceMinimumSpeed) ||
+                 record.values.bounceRestitution < 0.f ||
+                 record.values.bounceRestitution > 2.f ||
+                 record.values.bounceMinimumSpeed < 0.f ||
+                 record.values.bounceMinimumSpeed > 64.f ||
+                 (record.values.tileCollisionMode != 2 &&
+                  (record.values.bounceRestitution != 1.f ||
+                   record.values.bounceMinimumSpeed != 0.f)) ||
+                 (fields.size() == 21 &&
+                  record.values.bounceRestitution == 1.f &&
+                  record.values.bounceMinimumSpeed == 0.f))) {
+                *error = "Contrato de rebote C# invalido: " + record.name;
+                return false;
+            }
+            if (fields.size() >= 22 &&
+                (!integer(fields[21], &record.values.tileCollisionSurvivalLimit) ||
+                 record.values.tileCollisionSurvivalLimit < (fields.size() == 22 ? 1 : 0) ||
+                 record.values.tileCollisionSurvivalLimit > 64 ||
+                 (record.values.tileCollisionMode == 0 &&
+                  record.values.tileCollisionSurvivalLimit != 0))) {
+                *error = "Limite de sobrevivencia em colisao C# invalido: " + record.name;
+                return false;
+            }
+            if (fields.size() >= 23 &&
+                (!integer(fields[22], &record.values.tilePlatformCollision) ||
+                 record.values.tilePlatformCollision < (fields.size()==23 ? 1 : 0) ||
+                 record.values.tilePlatformCollision > 2)) {
+                *error = "Politica de plataforma C# invalida: " + record.name;
+                return false;
+            }
+            if (fields.size() == 27 &&
+                (!integer(fields[23], &record.values.tileCollisionBoxWidth) ||
+                 !integer(fields[24], &record.values.tileCollisionBoxHeight) ||
+                 !real(fields[25], &record.values.tileCollisionAnchorOffsetX) ||
+                 !real(fields[26], &record.values.tileCollisionAnchorOffsetY) ||
+                 record.values.tileCollisionBoxWidth < 0 ||
+                 record.values.tileCollisionBoxWidth > 512 ||
+                 record.values.tileCollisionBoxHeight < 0 ||
+                 record.values.tileCollisionBoxHeight > 512 ||
+                 record.values.tileCollisionAnchorOffsetX < -256.f ||
+                 record.values.tileCollisionAnchorOffsetX > 256.f ||
+                 record.values.tileCollisionAnchorOffsetY < -256.f ||
+                 record.values.tileCollisionAnchorOffsetY > 256.f ||
+                 (record.values.tileCollisionBoxWidth == 0 &&
+                  record.values.tileCollisionBoxHeight == 0 &&
+                  record.values.tileCollisionAnchorOffsetX == 0.f &&
+                  record.values.tileCollisionAnchorOffsetY == 0.f))) {
+                *error = "Caixa de colisao C# invalida: " + record.name;
+                return false;
             }
             projectilesByName.emplace(record.name, record.type);
             projectiles.push_back(std::move(record));
@@ -1084,12 +1917,15 @@ bool applyManagedSourceDefaults(
         if (tiles.size() > kSourceMaxCategory || basicItems.size() > kSourceMaxCategory || projectiles.size() > kSourceMaxCategory || weapons.size() > kSourceMaxCategory ||
             buffs.size() > kSourceMaxCategory || potions.size() > kSourceMaxCategory ||
             accessories.size() > kSourceMaxCategory || players.size() > kSourceMaxCategory ||
-            npcs.size() > kSourceMaxCategory || prefixes.size() > kSourceMaxCategory) {
+            npcs.size() > kSourceMaxCategory || prefixes.size() > kSourceMaxCategory || rarityCount > kSourceMaxCategory) {
             *error = "Quantidade de conteudo C# excede 4096 por categoria";
             return false;
         }
     }
-    if (tiles.size() != static_cast<size_t>(mod->tiles) ||
+    if (dustRows != mod->dusts ||
+        trees.size() != static_cast<size_t>(mod->trees) ||
+        gores.size() != static_cast<size_t>(mod->gores) ||
+        tiles.size() != static_cast<size_t>(mod->tiles) ||
         projectiles.size() != static_cast<size_t>(mod->projectiles) ||
         weapons.size() + potions.size() + accessories.size() + basicItems.size() !=
             static_cast<size_t>(mod->items) ||
@@ -1100,7 +1936,8 @@ bool applyManagedSourceDefaults(
         players.size() != static_cast<size_t>(mod->players) ||
         npcs.size() != static_cast<size_t>(mod->npcs) ||
         prefixes.size() != static_cast<size_t>(mod->prefixes) ||
-        seen.size() != mod->registeredKindTypes.size() + mod->playerClasses.size()) {
+        rarityCount != static_cast<size_t>(mod->rarities) ||
+        seen.size() != mod->registeredKindTypes.size() + mod->playerClasses.size() + trees.size() + gores.size()) {
         *error = "As classes compiladas nao correspondem ao conteudo registrado";
         return false;
     }
@@ -1131,10 +1968,66 @@ bool applyManagedSourceDefaults(
             }
         }
     }
+    for(auto& tree:trees) {
+        if(!tree.shakeItem.empty()) {
+            tree.shakeItemType=runtime::modItemTypeByKey(modId+"/"+tree.shakeItem);
+            if(tree.shakeItemType<runtime::kVanillaItemCount) {
+                *error="[CSharp][TreeLoader] Mod="+modId+" Class="+tree.name+
+                       " Stage=ResolveShakeItem Reason=Unregistered Result=Rejected";
+                return false;
+            }
+        }
+        if(!tree.woodItem.empty()) {
+            tree.woodItemType=runtime::modItemTypeByKey(modId+"/"+tree.woodItem);
+            if(tree.woodItemType<runtime::kVanillaItemCount) {
+                *error="[CSharp][TreeLoader] Mod="+modId+" Class="+tree.name+
+                       " Stage=ResolveWood Result=Rejected Reason=WoodItemNotRegistered";
+                return false;
+            }
+        }
+        const auto ground=std::find_if(tiles.begin(),tiles.end(),[&](const ManagedTileEntry& e) {
+            return e.name==tree.groundTile;
+        });
+        const auto sapling=std::find_if(tiles.begin(),tiles.end(),[&](const ManagedTileEntry& e) {
+            return e.name==tree.saplingTile;
+        });
+        if(ground==tiles.end()||sapling==tiles.end()||ground->type<runtime::kVanillaTileCount||
+           sapling->shape!=4||sapling->saplingGroundTile!=tree.groundTile ||
+           sapling->type<runtime::kVanillaTileCount) {
+            *error="[CSharp][TreeLoader] Mod="+modId+" Class="+tree.name+
+                   " Stage=ResolveTree Reason=GroundOrSaplingMismatch Result=Rejected";
+            return false;
+        }
+    }
+    for(const auto& item:mountItems) {
+        const int type=nativeMountType(modId,item.second);
+        if(type<0) {
+            *error="[CSharp][Mount] Stage=ResolveItemMount Result=Rejected";return false;
+        }
+        auto matched=std::find_if(nativeDefaults.begin(),nativeDefaults.end(),
+            [&](const NativeDefaultsRequest& req) {
+                return !req.projectile&&req.name==item.first;
+            });
+        const std::string value="mountType:i:"+std::to_string(type);
+        if(matched!=nativeDefaults.end()) {
+            if(matched->descriptor.find("mountType:")!=std::string::npos) {
+                *error="[CSharp][Mount] Stage=MountItemDefaults Reason=DuplicateField";return false;
+            }
+            matched->descriptor+=";"+value;
+        } else {
+            const int itemType=runtime::modItemTypeByKey(modId+"/"+item.first);
+            if(itemType<0) {
+                *error="[CSharp][Mount] Stage=MountItemDefaults Reason=MissingItemType";return false;
+            }
+            nativeDefaults.push_back({item.first,modId,"content/"+item.first+".cs",value,itemType,false});
+        }
+    }
     if (!applyManagedNativeBuffDefaultsBatch(modId, buffs, potions)) {
         *error = "Falha ao validar buffs e pocoes C# gerenciados";
         return false;
     }
+    if(!mounts.empty()&&!publishNativeMounts(modId,mod->directory,mounts,error))
+        return false;
     if ((!projectiles.empty() || !weapons.empty()) &&
         !applyManagedNativeDefaultsBatch(modId, projectiles, weapons,error)) {
         if(error->empty())*error = "[CSharp][ERROR][NativeContent] Mod="+modId+" API=BunnyProjectile/BunnyWeapon Stage=ApplyDefaults Result=Rejected Reason=BatchIdentityOrValueContractMismatch";
@@ -1152,27 +2045,144 @@ bool applyManagedSourceDefaults(
         *error = "Falha ao validar descritores de prefixo C#";
         return false;
     }
+    if(!wallDefinitions.empty()&&!walls::publish(std::move(wallDefinitions),error))return false;
     if (!tiles.empty() && !applyManagedNativeTileDefaultsBatch(modId, tiles)) {
         *error = "Falha ao aplicar os defaults nativos de BunnyTile"; return false;
     }
+    for(const auto& tree:trees)if(!tree.leafGoreName.empty()&&
+       std::none_of(gores.begin(),gores.end(),[&](const ManagedGoreEntry& gore) {
+           return gore.name==tree.leafGoreName;
+       })) {
+        *error="[CSharp][TreeLoader] Mod="+modId+" Class="+tree.name+
+               " Stage=ResolveLeaf Reason=GoreNotDeclared";
+        return false;
+    }
+    std::map<std::string,int> goreIds;
+    if(!gores.empty()&&!runSourcePublicationOnGameThread(
+         "Gore",[&] {
+             return publishManagedNativeGores(
+                 modId,mod->directory,gores,&goreIds,error);
+         },error))return false;
+    for(auto& tree:trees)if(!tree.leafGoreName.empty()) {
+        auto id=goreIds.find(tree.leafGoreName);
+        if(id==goreIds.end()) {
+            *error="[CSharp][TreeLoader] Mod="+modId+" Class="+tree.name+
+                   " Stage=ResolveLeaf Reason=GoreNotPublished";
+            return false;
+        }
+        tree.leafGoreType=id->second;
+    }
+    if(!trees.empty()&&!runSourcePublicationOnGameThread(
+         "Tree",[&] {
+             return publishManagedNativeTrees(modId,mod->directory,trees,error);
+         },error))return false;
     if (!useSounds::publish(useSounds,error)) return false;
+    for (auto& item : basicItems) {
+        const auto overrideType = itemRarityOverrides.find(item.name);
+        if (overrideType != itemRarityOverrides.end())
+            item.values[BasicRare] = overrideType->second;
+    }
+    for (const auto& [name, rarity] : itemRarityOverrides) {
+        const auto itemKey = sourceIdentityForWire("ITEM", name);
+        const auto item = mod->registeredKindTypes.find(itemKey);
+        const auto base = mod->registeredBases.find(itemKey);
+        if (item == mod->registeredKindTypes.end() ||
+            base == mod->registeredBases.end()) {
+            *error = "[CSharp][ERROR][RarityLoader] Mod=" + modId +
+                " Class=" + name + " Stage=ApplyRarity Reason=MissingItemOwner";
+            return false;
+        }
+        auto native = std::find_if(nativeDefaults.begin(), nativeDefaults.end(),
+            [&](const NativeDefaultsRequest& request) {
+                return !request.projectile && request.name == name;
+            });
+        if (base->second == "BunnyItem") {
+            if (std::none_of(basicItems.begin(), basicItems.end(),
+                [&](const BasicItemEntry& basic) { return basic.name == name; })) {
+                *error = "[CSharp][ERROR][RarityLoader] Mod=" + modId +
+                    " Class=" + name + " Stage=ApplyRarity Reason=MissingBasicItem";
+                return false;
+            }
+            if (native == nativeDefaults.end()) continue;
+        } else if (native == nativeDefaults.end()) {
+            const auto source = mod->sourcePaths.find(itemKey);
+            nativeDefaults.push_back({name, modId,
+                source == mod->sourcePaths.end() ? "<unavailable>" : source->second,
+                "rare:i:" + std::to_string(rarity), item->second, false});
+            continue;
+        }
+        if (native->descriptor.starts_with("rare:") ||
+            native->descriptor.find(";rare:") != std::string::npos) {
+            *error = "[CSharp][ERROR][RarityLoader] Mod=" + modId +
+                " Class=" + name + " Stage=ApplyRarity Reason=ConflictingNativeRare";
+            return false;
+        }
+        if (base->second != "BunnyItem") {
+            if (!native->descriptor.empty()) native->descriptor += ";";
+            native->descriptor += "rare:i:" + std::to_string(rarity);
+        }
+    }
     if (!applyNativeBasicItemDefaults(modId,basicItems,error)) return false;
+    defaultsApply.touched=true;
+    std::vector<int> retainedItemTypes;
+    for(const auto& item:basicItems)retainedItemTypes.push_back(item.type);
+    retainNativeArmorPoliciesForMod(modId,retainedItemTypes);
+    retainNativeItemPoliciesForMod(modId,retainedItemTypes);
     for (const auto& item : basicItems) {
-        if (item.defense>0 && !setBasicItemDefense(item.type,item.defense,error)) return false;
+        if ((item.defenseSpecified || item.defense>0) && !setBasicItemDefense(item.type,item.defense,error)) return false;
+    }
+    for(const auto& quest:anglerQuests) {
+        if(std::none_of(basicItems.begin(),basicItems.end(),
+            [&](const BasicItemEntry& item) {
+                return item.type==quest.type&&item.name==quest.name;
+            })) {
+            *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+" Class="+quest.name+
+                " Stage=Publish Reason=PrimaryItemDefaultsMissing";
+            return false;
+        }
     }
     if(!enqueueOwnedSourceRecipes(modId,recipeOwners,error))return false;
     for(const auto& request:nativeDefaults)if(!seen.contains(sourceIdentityForWire(request.projectile?"PROJECTILE":"ITEM",request.name))) {
         *error="[CSharp][ERROR][NativeDefaults] Mod="+modId+" Class="+request.name+" Stage=Publish Result=Rejected Reason=PrimaryDefaultsMissing";return false;
     }
     if(!holdout::publish(holdouts,error))return false;
+    // Uma recompilação pode remover todas as declarações NATIVE_* do mod.
+    // Substituir o lote inteiro também nesse caso evita políticas órfãs.
+    if(!publishNativeDefaults(nativeDefaults,error,[](const std::string& key){
+        const auto slash=key.find('/');return slash==std::string::npos?-1:runtime::modProjectileTypeByName(key.substr(0,slash),key.substr(slash+1));
+    },modId))return false;
     if(!nativeDefaults.empty()) {
-        if(!publishNativeDefaults(nativeDefaults,error,[](const std::string& key){
-            const auto slash=key.find('/');return slash==std::string::npos?-1:runtime::modProjectileTypeByName(key.substr(0,slash),key.substr(slash+1));
-        }))return false;
         requestBasicItemInstanceRefresh("NativeDefaultsPublished");
         BL_INFO("[CSharp][NativeDefaults] Mod=%s Stage=Publish Contents=%zu Result=Ready",modId.c_str(),nativeDefaults.size());
     }
+    if(!shooting::publish(shooting,error))return false;
+    localization::stage(modId,std::move(localized));
+    if(!angler::registry().publish(modId,anglerQuests,error)) {
+        *error="[CSharp][ERROR][AnglerQuest] Mod="+modId+
+            " Stage=Publish Reason="+*error;
+        return false;
+    }
+    // So classes diferentes de V0 chegam no wire; a ausencia é o padrao.
+    if (damageTypes.size() > static_cast<size_t>(mod->basicItems + mod->projectiles +
+          (mod->items - mod->accessories - mod->potions - mod->basicItems)) ||
+        !nativeDamageTypes().publish(modId, damageTypes)) {
+        *error = "[CSharp][DamageClass] Mod=" + modId +
+            " Stage=Publish Result=Rejected Reason=MissingOrDuplicateDamageType";
+        return false;
+    }
+    {
+        std::string bonusError;
+        if (!damage_combat::classBonuses().publish(modId, classBonusRows, &bonusError)) {
+            *error = "[CSharp][DamageClass] Mod=" + modId +
+                " Stage=PublishClassBonus Result=Rejected Reason=" + bonusError;
+            return false;
+        }
+        if (!classBonusRows.empty())
+            BL_INFO("[CSharp][DamageClass] Mod=%s Stage=PublishClassBonus Rows=%zu Result=Ready",
+                    modId.c_str(), classBonusRows.size());
+    }
     mod->runtimeApplied = true;
+    defaultsApply.complete=true;
     return true;
 }
 

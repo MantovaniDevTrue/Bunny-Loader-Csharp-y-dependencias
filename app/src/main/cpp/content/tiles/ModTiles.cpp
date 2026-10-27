@@ -1,10 +1,15 @@
 #include "content/tiles/TileRegistryInternal.h"
 #include "content/tiles/ModTiles.h"
+#include "experiments/csharp/NativeTileDrawCachePolicy.h"
+#include "experiments/csharp/NativeTileOverlayPolicy.h"
 #include "content/tiles/ModTrees.h"
+#include "content/tiles/NativeTileDrawShapeBounds.h"
+#include "experiments/csharp/NativeAbortProbe.h"
 #include "core/Log.h"
 #include "hook/HookManager.h"
 #include "il2cpp/Api.h"
 #include "il2cpp/Resolver.h"
+#include "il2cpp/FieldContract.h"
 #include "hook/CodePatch.h"
 #include "content/common/ContentAssets.h"
 #include "content/common/GameRefs.h"
@@ -12,6 +17,7 @@
 #include "content/tiles/ModTileMap.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -29,6 +35,7 @@ using tile_registry::g_installed;
 std::atomic<TilesInstalledHook> g_installedHook{nullptr};
 std::atomic<TilesInstalledHook> g_nativeInstalledHook{nullptr};
 std::atomic<bool> g_nativePending{false};
+std::atomic<bool> g_overlayLoadsPending{false};
 // O SetStaticDefaults do lote ja rodou (ele espera o TileObjectData existir).
 std::atomic<bool> g_staticDone{false};
 bool g_failed = false;
@@ -128,6 +135,31 @@ Il2CppArray* readStatic(FieldInfo* f) {
 void applyTexture(int type, const Entry& e) {
     Il2CppObject* asset = e.asset ? il2cpp::api().gchandle_get_target(e.asset) : nullptr;
     if (asset) content::setTableElement(refs().textures, type, asset);
+}
+
+void loadRequestedTileOverlays() {
+    std::lock_guard<std::mutex> lock(g_mx);
+    for(auto& e:g_regs) {
+        if(!e.overlaysRequested||e.overlaysAttempted||!e.asset)continue;
+        e.overlaysAttempted=true;
+        for(int variant=1;variant<=2;++variant) {
+            const std::string path=bl::csharp::tile_overlay::path(e.def.texture,variant);
+            if(path.empty())continue;
+            FILE* file=std::fopen(path.c_str(),"rb");
+            if(!file)continue;
+            std::fclose(file);
+            int width=0,height=0;
+            auto* asset=content::loadTextureAsset(path,nullptr,0,
+                e.def.mod+"/"+e.def.name+(variant==1?"_Glow":"_Flame"),&width,&height);
+            if(!asset||width<=0||height<=0)continue;
+            const uint32_t root=il2cpp::api().gchandle_new(asset,false);
+            if(!root)continue;
+            const size_t slot=static_cast<size_t>(variant-1);
+            e.overlays[slot]=root;
+            e.overlayWidth[slot]=width;
+            e.overlayHeight[slot]=height;
+        }
+    }
 }
 
 // ---- Main.tileMerge: bool[754][754] ----
@@ -527,6 +559,13 @@ bool setObjectDataLocked(bool locked) {
 // tModLoader: com TileObjectData, a largura, o deslocamento e a altura da
 // linha vem dele. Nativo: roda para toda celula de mod na tela, todo quadro.
 
+// Marcadores de crash (lock-free) do registro de forma/desenho dos tiles de mod:
+// 1201..1209. Restauram o estagio anterior ao sair, para nao culpar o vizinho.
+struct TileStageScope {
+    uint32_t previous = bl::csharp::nativeGameStage();
+    ~TileStageScope() { bl::csharp::setNativeGameStage(previous); }
+};
+
 struct DrawShape {
     bool ok = false;
     int width = 16, yOffset = 0, padding = 2, rows = 1, fullHeight = 18;
@@ -543,6 +582,9 @@ constexpr size_t kMaxAnimated = 8192;
 std::atomic<int> g_animHeight[kMaxAnimated];
 FieldInfo* g_tileFrameField = nullptr;   // Main.tileFrame
 std::atomic<DrawDataHook> g_drawDataHook{nullptr};
+std::atomic<DrawDataHook> g_managedDrawDataHook{nullptr};
+std::atomic<const std::atomic<uint8_t>*> g_managedDrawDataMarks{nullptr};
+std::atomic<const std::atomic<uint8_t>*> g_managedDrawDataUncached{nullptr};
 std::atomic<const std::atomic<uint8_t>*> g_drawDataMarks{nullptr};
 std::atomic<const std::atomic<uint8_t>*> g_drawDataUncached{nullptr};   // CacheDrawData = false
 
@@ -681,12 +723,17 @@ void hkRangeFrame(int32_t x0, int32_t y0, int32_t x1, int32_t y1, const MethodIn
 void applyTileDrawData(int32_t x, int32_t y, uint16_t type, int16_t* frameX,
                        int16_t* frameY, int32_t* width, int32_t* height, int32_t* top, int32_t* halfBrick,
                        int32_t* addFrX, int32_t* addFrY, int32_t* effects, bool special) {
+    (void)halfBrick; // Half-brick clipping remains owned by Terraria.
     if (type < kVanillaTileCount) return;
     const size_t i = static_cast<size_t>(type) - kVanillaTileCount;
 
     const DrawDataHook hook = g_drawDataHook.load(std::memory_order_acquire);
     const std::atomic<uint8_t>* marks = g_drawDataMarks.load(std::memory_order_acquire);
     const bool toMod = hook && marks && marks[type].load(std::memory_order_relaxed);
+    const DrawDataHook managedHook = g_managedDrawDataHook.load(std::memory_order_acquire);
+    const std::atomic<uint8_t>* managedMarks = g_managedDrawDataMarks.load(std::memory_order_acquire);
+    const bool toManaged = managedHook && managedMarks &&
+                           managedMarks[type].load(std::memory_order_acquire);
 
     // O jogo ja põe um deslocamento vertical padrao baseado em Main.tileFrame.
     // Para tiles de mod, a folha usa AnimationFrameHeight (ou zero quando os
@@ -694,7 +741,7 @@ void applyTileDrawData(int32_t x, int32_t y, uint16_t type, int16_t* frameX,
     // O quadro tambem vai na chave do cache para AnimateIndividualTile.
     const int frameHeight = i < kMaxAnimated ? g_animHeight[i].load(std::memory_order_relaxed) : 0;
     int32_t tileFrame = 0;
-    if ((frameHeight > 0 || toMod) && g_tileFrameField) {
+    if ((frameHeight > 0 || toMod || toManaged) && g_tileFrameField) {
         Il2CppArray* frames = readStatic(g_tileFrameField);
         if (frames && type < frames->length) tileFrame = static_cast<const int32_t*>(arrayData(frames))[type];
     }
@@ -713,7 +760,7 @@ void applyTileDrawData(int32_t x, int32_t y, uint16_t type, int16_t* frameX,
     }
 
     // O SetDrawPositions & cia. do mod, so para os tipos que os sobrescrevem.
-    if (!toMod) return;
+    if (!toMod && !toManaged) return;
     DrawKey key;
     key.x = x;
     key.y = y;
@@ -731,11 +778,20 @@ void applyTileDrawData(int32_t x, int32_t y, uint16_t type, int16_t* frameX,
     const DrawEpoch epoch = drawEpochAt(x, y);
     const int64_t now = coarseNowNs();
     const std::atomic<uint8_t>* uncached = g_drawDataUncached.load(std::memory_order_acquire);
-    const bool cached = !special && (!uncached || !uncached[type].load(std::memory_order_relaxed));
+    const std::atomic<uint8_t>* managedUncached =
+        g_managedDrawDataUncached.load(std::memory_order_acquire);
+    const bool jsSkipCache = toMod && uncached &&
+        uncached[type].load(std::memory_order_relaxed);
+    const bool managedSkipCache = toManaged && managedUncached &&
+        managedUncached[type].load(std::memory_order_relaxed);
+    const bool cached = csharp::tile_draw_cache::enabled(special, jsSkipCache, managedSkipCache);
     TileDrawData d;
     if (!cached || !drawCacheGet(key, epoch, now, &d)) {
         d = key.in;
-        if (hook(x, y, type, &d, special) && cached) drawCachePut(key, epoch, now, d);
+        bool applied = false;
+        if (toMod) applied = hook(x, y, type, &d, special);
+        if (toManaged) applied = managedHook(x, y, type, &d, special) || applied;
+        if (applied && cached) drawCachePut(key, epoch, now, d);
     }
     *frameX = static_cast<int16_t>(d.frameX);
     *frameY = static_cast<int16_t>(d.frameY);
@@ -752,6 +808,8 @@ void hkGetTileDrawData(Il2CppObject* self, int32_t x, int32_t y, void* info, uin
                        int32_t* addFrX, int32_t* addFrY, int32_t* effects, Il2CppObject** glow, void* glowRect,
                        void* glowColor, const MethodInfo* m) {
     g_origDrawData(self, x, y, info, type, frameX, frameY, width, height, top, halfBrick, addFrX, addFrY, effects, glow, glowRect, glowColor, m);
+    TileStageScope stageScope;
+    bl::csharp::setNativeGameStage(1209);
     noteTreeDrawTile(x, y, type, *frameX, *frameY);
     applyTileDrawData(x, y, type, frameX, frameY, width, height, top, halfBrick, addFrX, addFrY, effects, false);
 }
@@ -761,6 +819,8 @@ void hkGetSpecialTileDrawData(Il2CppObject* self, int32_t x, int32_t y, void* ti
                        int32_t* addFrX, int32_t* addFrY, int32_t* effects, Il2CppObject** glow, void* glowRect,
                        void* glowColor, const MethodInfo* m) {
     g_origSpecialDrawData(self, x, y, tile, type, frameX, frameY, width, height, top, halfBrick, addFrX, addFrY, effects, glow, glowRect, glowColor, m);
+    TileStageScope stageScope;
+    bl::csharp::setNativeGameStage(1209);
     applyTileDrawData(x, y, type, frameX, frameY, width, height, top, halfBrick, addFrX, addFrY, effects, true);
 }
 
@@ -777,7 +837,6 @@ int invokeInt(Il2CppObject* obj, const char* getter, bool* ok) {
 }
 
 DrawShape readDrawShape(Il2CppObject* data) {
-    auto& a = il2cpp::api();
     DrawShape s;
     bool ok = true;
     s.width = invokeInt(data, "get_CoordinateWidth", &ok);
@@ -787,22 +846,30 @@ DrawShape readDrawShape(Il2CppObject* data) {
     s.fullHeight = invokeInt(data, "get_CoordinateFullHeight", &ok);
     s.cols = invokeInt(data, "get_Width", &ok);
     s.fullWidth = invokeInt(data, "get_CoordinateFullWidth", &ok);
-    const MethodInfo* get = a.class_get_method_from_name(a.object_get_class(data), "get_CoordinateHeights", 0);
-    Il2CppObject* exc = nullptr;
-    auto* heights = get ? reinterpret_cast<Il2CppArray*>(a.runtime_invoke(get, data, nullptr, &exc)) : nullptr;
-    if (!ok || exc || !heights || heights->length == 0 || s.rows <= 0) return {};
-    const auto* h = static_cast<const int32_t*>(arrayData(heights));
-    s.heights.assign(h, h + heights->length);
-    // Menos alturas que linhas (o jogo tolera): a ultima vale para o resto.
-    while (static_cast<int>(s.heights.size()) < s.rows) s.heights.push_back(s.heights.back());
+    if (!ok || !tile_draw_shape::valid(s.rows, 1)) {
+        BL_ERROR("[CSharp][TileDraw] Stage=ReadShape Result=Rejected Reason=InvalidRows Rows=%d",
+                 s.rows);
+        return {};
+    }
+    // Alturas sem ler o Int32[] do jogo: ver tile_draw_shape::reconstructHeights.
+    s.heights.assign(static_cast<size_t>(s.rows), 0);
+    if (!tile_draw_shape::reconstructHeights(s.rows, s.fullHeight, s.padding,
+                                             s.heights.data(), s.rows)) {
+        BL_ERROR("[CSharp][TileDraw] Stage=ReadShape Result=Rejected Reason=CoordinateHeightsUnreconstructable Rows=%d FullHeight=%d Padding=%d",
+                 s.rows, s.fullHeight, s.padding);
+        return {};
+    }
+    BL_DEBUG("[CSharp][TileDraw] Stage=ReadShape Result=Ready Source=CoordinateFullHeight Rows=%d FullHeight=%d Padding=%d LastHeight=%d",
+             s.rows, s.fullHeight, s.padding, s.heights.back());
     s.ok = true;
     return s;
 }
 
 void hookDrawData() {
     static bool done = false;
-    if (done) return;
-    done = true;
+    if (done && g_origSpecialDrawData) return;
+    TileStageScope stageScope;
+    bl::csharp::setNativeGameStage(1205);
     auto& a = il2cpp::api();
     Il2CppClass* main = il2cpp::findClass({"Terraria", "Main", {}});
     g_tileFrameField = main ? il2cpp::findField(main, "tileFrame") : nullptr;
@@ -821,13 +888,20 @@ void hookDrawData() {
         if (drawTile) special = m;
     }
 
-    if (!special || !hook::install(special, hkGetSpecialTileDrawData, &g_origSpecialDrawData))
+    bl::csharp::setNativeGameStage(1206);
+    if (!g_origSpecialDrawData &&
+        (!special || !hook::install(special, hkGetSpecialTileDrawData, &g_origSpecialDrawData)))
         BL_ERROR("tiles de mod: sem hook no GetTileDrawData(Tile); desenho especial indisponivel");
-    if (!target || !hook::install(target, hkGetTileDrawData, &g_origDrawData)) {
+    bl::csharp::setNativeGameStage(1207);
+    if (!g_origDrawData &&
+        (!target || !hook::install(target, hkGetTileDrawData, &g_origDrawData))) {
         BL_ERROR("tiles de mod: sem hook no TileDrawing.GetTileDrawData; a ultima linha de um movel de mod sai cortada");
         return;
     }
 
+    if (done) return;
+    done = true;
+    bl::csharp::setNativeGameStage(1208);
     Il2CppClass* worldGen = il2cpp::findClass({"Terraria", "WorldGen", {}});
     const MethodInfo* square = worldGen ? a.class_get_method_from_name(worldGen, "SquareTileFrame", 3) : nullptr;
     const MethodInfo* range = worldGen ? a.class_get_method_from_name(worldGen, "RangeFrame", 4) : nullptr;
@@ -840,6 +914,8 @@ void hookDrawData() {
 
 /** Guarda a forma (_data[tipo]) de cada tile de [first, last] depois do SetStaticDefaults. */
 void keepObjectData(int first, int last) {
+    TileStageScope stageScope;
+    bl::csharp::setNativeGameStage(1201);
     auto& a = il2cpp::api();
     Il2CppObject* list = objectDataList();
     const MethodInfo* get = list ? a.class_get_method_from_name(a.object_get_class(list), "get_Item", 1) : nullptr;
@@ -850,10 +926,13 @@ void keepObjectData(int first, int last) {
         if (!get) continue;
         Il2CppObject* exc = nullptr;
         void* args[1] = {&type};
+        bl::csharp::setNativeGameStage(1202);
         Il2CppObject* obj = a.runtime_invoke(get, list, args, &exc);
         if (exc || !obj) continue;
+        bl::csharp::setNativeGameStage(1203);
         g_objectData[i] = a.gchandle_new(obj, false);
         if (g_drawShapes.size() <= i) g_drawShapes.resize(i + 1);
+        bl::csharp::setNativeGameStage(1204);
         g_drawShapes[i] = readDrawShape(obj);
         ++shaped;
     }
@@ -993,6 +1072,8 @@ void tickModTiles() {
                 }
             }
         }
+        if(g_overlayLoadsPending.exchange(false,std::memory_order_acq_rel))
+            loadRequestedTileOverlays();
         g_tables.checkPending(from);
         fixTileMerge(from);
         if (fixGlowMask(from)) BL_DEBUG("tiles de mod: tileGlowMask dos tipos de mod em -1");
@@ -1091,8 +1172,22 @@ void setDrawDataHook(DrawDataHook hook, const std::atomic<uint8_t>* marks, const
     invalidateDrawCache();
 }
 
+void setManagedTileDrawDataHook(DrawDataHook hook, const std::atomic<uint8_t>* marks,
+                                const std::atomic<uint8_t>* uncached) {
+    g_managedDrawDataUncached.store(uncached, std::memory_order_release);
+    g_managedDrawDataMarks.store(marks, std::memory_order_release);
+    g_managedDrawDataHook.store(hook, std::memory_order_release);
+    invalidateDrawCache();
+}
+void invalidateManagedTileDrawCache() {
+    invalidateDrawCache();
+}
+
 void ensureTileDrawHook() {
     hookDrawData();
+}
+bool tileDrawHooksReady() {
+    return g_origDrawData && g_origSpecialDrawData;
 }
 
 bool modObjectShape(int type, ModObjectShape* out) {
@@ -1109,6 +1204,40 @@ bool modObjectShape(int type, ModObjectShape* out) {
     out->fullHeight = s.fullHeight;
     out->heights = s.heights;
     return true;
+}
+
+void requestModTileOverlays(int type) {
+    if(type<kVanillaTileCount)return;
+    const size_t index=static_cast<size_t>(type-kVanillaTileCount);
+    std::lock_guard<std::mutex> lock(g_mx);
+    if(index>=g_regs.size())return;
+    auto& entry=g_regs[index];
+    if(!entry.overlaysAttempted) {
+        entry.overlaysRequested=true;
+        g_overlayLoadsPending.store(true,std::memory_order_release);
+    }
+}
+
+bool modTileOverlayAvailable(int type,int variant,int frameX,int frameY,int width,int height) {
+    if(type<kVanillaTileCount||variant<1||variant>2)return false;
+    const size_t index=static_cast<size_t>(type-kVanillaTileCount);
+    const size_t layer=static_cast<size_t>(variant-1);
+    std::lock_guard<std::mutex> lock(g_mx);
+    if(index>=g_regs.size())return false;
+    const Entry& entry=g_regs[index];
+    return entry.overlays[layer] &&
+        bl::csharp::tile_overlay::frameInside(frameX,frameY,width,height,
+            entry.overlayWidth[layer],entry.overlayHeight[layer]);
+}
+
+Il2CppObject* modTileOverlayAsset(int type,int variant) {
+    if(type<kVanillaTileCount||variant<1||variant>2)return nullptr;
+    const size_t index=static_cast<size_t>(type-kVanillaTileCount);
+    const size_t layer=static_cast<size_t>(variant-1);
+    std::lock_guard<std::mutex> lock(g_mx);
+    if(index>=g_regs.size())return nullptr;
+    const uint32_t root=g_regs[index].overlays[layer];
+    return root?il2cpp::api().gchandle_get_target(root):nullptr;
 }
 
 std::vector<ModTileInfo> modTiles() {

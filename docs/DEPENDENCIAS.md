@@ -1,37 +1,31 @@
-# Dependências do núcleo C#
+# Dependências do Bunny Loader C#
 
-As dependências desta entrega foram extraídas da mesma revisão integrada do Bunny Loader C# (`v1.0`, commit `cfbe784ee3cbc0ba2fabafce56c59e6eac41b67b`).
+Os arquivos foram sincronizados do [commit `4119582942c4`](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp/commit/4119582942c43b3dc52f4edf96c366a190630ac9). Não misture DLLs, headers, bibliotecas nativas ou fontes de versões diferentes.
 
-## Runtime e SDK
+## Runtime e projeto Android
 
-| Componente | Localização |
+| Componente | Local |
 | --- | --- |
-| MonoVM ARM64 modificado | [`app/src/main/jniLibs/arm64-v8a/`](../app/src/main/jniLibs/arm64-v8a/) |
-| DLLs do framework, Roslyn e SDK | [`app/src/main/assets/managed/`](../app/src/main/assets/managed/) |
-| Código e scripts do Mono | [`tools/mono/`](../tools/mono/) |
-| SDK C# | [`experiments/csharp/BunnyCsSdk/`](../experiments/csharp/BunnyCsSdk/) |
-| Referências dos mods-fonte | [`experiments/csharp/BunnySourceSdk/`](../experiments/csharp/BunnySourceSdk/) |
+| MonoVM ARM64 e bibliotecas nativas | [`app/src/main/jniLibs/arm64-v8a/`](../app/src/main/jniLibs/arm64-v8a/) |
+| Roslyn, worker, SDK e assemblies gerenciados | [`app/src/main/assets/managed/`](../app/src/main/assets/managed/) |
+| Mono ARM64, ferramentas e patches | [`tools/mono/`](../tools/mono/) |
+| API de mods C# | [`experiments/csharp/BunnyCsSdk/`](../experiments/csharp/BunnyCsSdk/) |
+| SDK de compilação de fontes | [`experiments/csharp/BunnySourceSdk/`](../experiments/csharp/BunnySourceSdk/) |
 | Compilador Roslyn | [`experiments/csharp/BunnySourceCompiler/`](../experiments/csharp/BunnySourceCompiler/) |
-| Worker | [`experiments/csharp/BunnyManagedProbe/`](../experiments/csharp/BunnyManagedProbe/) |
+| Worker MonoVM | [`experiments/csharp/BunnyManagedProbe/`](../experiments/csharp/BunnyManagedProbe/) |
+| Hooks C++ e ponte IL2CPP | [`app/src/main/cpp/experiments/csharp/`](../app/src/main/cpp/experiments/csharp/) |
+| Serviço Kotlin Android | [`app/src/main/kotlin/dev/bunnyloader/csharp/`](../app/src/main/kotlin/dev/bunnyloader/csharp/) |
 
-As DLLs e as bibliotecas nativas estão presentes nos diretórios utilizados pelo Gradle. A biblioteca Mono modificada possui documentação, licença e hashes em [`tools/mono/`](../tools/mono/).
+A compilação Android utiliza os arquivos Gradle e CMake do projeto. Os testes gerenciados podem ser executados separadamente a partir dos projetos `.csproj`; isso não produz um APK jogável.
 
-## Ambiente de compilação
+## Exemplos e testes
 
-O projeto Android utiliza Gradle, Kotlin, CMake e NDK, com as versões exigidas pelos arquivos [`build.gradle.kts`](../build.gradle.kts) e [`app/build.gradle.kts`](../app/build.gradle.kts). A integração nativa é destinada ao Android ARM64.
+O [ExampleMod C#](../samples/ExampleModCSharp/) acompanha a revisão integrada, junto com os testes de regressão em [`tests/`](../tests/). Os exemplos JavaScript exigidos pelo host original permanecem para preservar a compilação do Bunny Loader.
 
-Os projetos C# podem ser inspecionados por meio dos arquivos `.csproj`; sua compilação separada não gera um APK Android.
+A importação também verifica a presença das bibliotecas Mono, DLLs e arquivos de integração. A QA Android de origem aprovou a compilação e a assinatura do [APK de referência](https://github.com/MantovaniDevTrue/Bunnyloader-Csharp-Builds/releases/tag/csharp-unified-qa-4119582942c4).
 
-O código original do host Bunny foi mantido, inclusive JNI, hooks IL2CPP, inicialização e recursos necessários ao funcionamento do aplicativo. Remover módulos desse host sem revisar o CMake e o Gradle pode deixar a integração C# incompleta.
+## Arquivos proprietários
 
-## Componentes não incluídos
+Este repositório não publica `libil2cpp.so`, `libunity.so`, dados ou assets proprietários do Terraria, dumps, APKs nem chaves de assinatura. Esses arquivos precisam ser fornecidos legalmente durante um build do host integrado.
 
-Este repositório **não distribui** `libil2cpp.so`, `libunity.so`, assets proprietários do Terraria/Unity, dumps do jogo, APKs nem chaves de assinatura. O responsável pela compilação precisa fornecer legalmente esses componentes fora do repositório.
-
-A ausência dos binários do Terraria não indica falta de alguma biblioteca do MonoVM ou do Roslyn. São dependências diferentes.
-
-## Atualizações
-
-Não substitua apenas as DLLs ou o Mono por arquivos de branches recentes. Ao atualizar o suporte C#, os contratos do SDK, o compilador, a JNI, os hooks nativos e as bibliotecas devem acompanhar a mesma revisão.
-
-Consulte [Integração](INTEGRACAO.md) e [Versão de origem](../SOURCE_VERSION.md).
+A ausência dos arquivos do Terraria não significa ausência das bibliotecas do MonoVM/Roslyn. São dependências distintas.
